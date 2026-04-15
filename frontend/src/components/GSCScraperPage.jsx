@@ -483,6 +483,17 @@ function DrilldownResults({ urlGroups, statusColor, statusLabel, device, cwvStat
   const totalUrls = urlGroups.reduce((s, g) => s + (g.population || 0), 0);
   const filteredUrls = filtered.reduce((s, g) => s + (g.population || 0), 0);
 
+  // Group by issueLabel; groups without a label go under a fallback key
+  const hasIssueLabels = urlGroups.some(g => g.issueLabel);
+  const issueGroups = hasIssueLabels
+    ? filtered.reduce((acc, g) => {
+        const key = g.issueLabel || 'Other';
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(g);
+        return acc;
+      }, {})
+    : null;
+
   return (
     <div style={{ margin: '0 24px 24px' }}>
       <div className="table-wrapper">
@@ -518,48 +529,76 @@ function DrilldownResults({ urlGroups, statusColor, statusLabel, device, cwvStat
           <div className="empty-state" style={{ padding: '40px' }}>
             <p>{filterPattern ? 'No groups match the filter.' : 'No URL groups found.'}</p>
           </div>
+        ) : issueGroups ? (
+          // Grouped by issue label
+          Object.entries(issueGroups).map(([issue, rows]) => (
+            <div key={issue} style={{ marginBottom: 24 }}>
+              <div style={{
+                padding: '10px 16px',
+                background: '#f8f9fa',
+                borderLeft: `4px solid ${statusColor[cwvStatus] || '#9aa0a6'}`,
+                borderRadius: '0 4px 4px 0',
+                marginBottom: 8,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+              }}>
+                <strong style={{ fontSize: 14 }}>{issue}</strong>
+                <span className="table-count" style={{ marginLeft: 'auto' }}>
+                  {rows.length} groups · {rows.reduce((s, g) => s + (g.population || 0), 0).toLocaleString()} URLs
+                </span>
+              </div>
+              <IssueGroupTable rows={rows} statusColor={statusColor} statusLabel={statusLabel} />
+            </div>
+          ))
         ) : (
-          <div className="table-scroll">
-            <table className="cwv-table">
-              <thead>
-                <tr>
-                  <th className="th-url">Example URL</th>
-                  <th className="th-metric">Group Size</th>
-                  <th className="th-metric">LCP</th>
-                  <th className="th-metric">CLS</th>
-                  <th className="th-metric">INP</th>
-                  <th className="th-metric">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((g, i) => (
-                  <tr key={i} className="tr-row">
-                    <td className="td-url" title={g.exampleUrl}>
-                      <a href={g.exampleUrl} target="_blank" rel="noreferrer">
-                        {g.exampleUrl.replace(/^https?:\/\/[^/]+/, '') || '/'}
-                      </a>
-                    </td>
-                    <td className="td-source">{g.population?.toLocaleString() ?? '—'}</td>
-                    <td className="td-source">{g.lcp ?? '—'}</td>
-                    <td className="td-source">{g.cls ?? '—'}</td>
-                    <td className="td-source">{g.inp ?? '—'}</td>
-                    <td>
-                      {g.status ? (
-                        <span className="status-dot" style={{
-                          background: (statusColor[g.status] || '#9aa0a6') + '20',
-                          color: statusColor[g.status] || '#9aa0a6',
-                        }}>
-                          {statusLabel[g.status] || g.status}
-                        </span>
-                      ) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <IssueGroupTable rows={filtered} statusColor={statusColor} statusLabel={statusLabel} />
         )}
       </div>
+    </div>
+  );
+}
+
+function IssueGroupTable({ rows, statusColor, statusLabel }) {
+  return (
+    <div className="table-scroll">
+      <table className="cwv-table">
+        <thead>
+          <tr>
+            <th className="th-url">Example URL</th>
+            <th className="th-metric">Group Size</th>
+            <th className="th-metric">LCP</th>
+            <th className="th-metric">CLS</th>
+            <th className="th-metric">INP</th>
+            <th className="th-metric">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((g, i) => (
+            <tr key={i} className="tr-row">
+              <td className="td-url" title={g.exampleUrl}>
+                <a href={g.exampleUrl} target="_blank" rel="noreferrer">
+                  {g.exampleUrl.replace(/^https?:\/\/[^/]+/, '') || '/'}
+                </a>
+              </td>
+              <td className="td-source">{g.population?.toLocaleString() ?? '—'}</td>
+              <td className="td-source">{g.lcp ?? '—'}</td>
+              <td className="td-source">{g.cls ?? '—'}</td>
+              <td className="td-source">{g.inp ?? '—'}</td>
+              <td>
+                {g.status ? (
+                  <span className="status-dot" style={{
+                    background: (statusColor[g.status] || '#9aa0a6') + '20',
+                    color: statusColor[g.status] || '#9aa0a6',
+                  }}>
+                    {statusLabel[g.status] || g.status}
+                  </span>
+                ) : '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

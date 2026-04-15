@@ -261,17 +261,21 @@ async function clickAndCollectSummary(page, status, onGroup, send) {
   const STATUS_TEXT = { 'needs-improvement': 'need improvement', poor: 'poor' };
   const targetText = STATUS_TEXT[status] || status;
 
-  // Grab indices of rows matching the target status
-  const matchingIndices = await page.evaluate((target) => {
+  // Grab indices + labels of rows matching the target status
+  const matchingRows = await page.evaluate((target) => {
     return Array.from(document.querySelectorAll('table tbody tr'))
-      .map((row, i) => ({ i, text: row.innerText.toLowerCase() }))
-      .filter(({ text }) => text.includes(target))
-      .map(({ i }) => i);
+      .map((row, i) => {
+        const cells = Array.from(row.querySelectorAll('td'));
+        // Issue name is typically in the 2nd cell (index 1)
+        const label = cells[1]?.innerText?.trim() || cells[0]?.innerText?.trim() || `Issue ${i + 1}`;
+        return { i, text: row.innerText.toLowerCase(), label };
+      })
+      .filter(({ text }) => text.includes(target));
   }, targetText);
 
-  send('status', { message: `Found ${matchingIndices.length} ${status} issue(s) on summary page` });
+  send('status', { message: `Found ${matchingRows.length} ${status} issue(s) on summary page` });
 
-  if (matchingIndices.length === 0) {
+  if (matchingRows.length === 0) {
     const sample = await page.evaluate(() =>
       Array.from(document.querySelectorAll('table tbody tr')).slice(0, 6).map(r => r.innerText.trim().slice(0, 80))
     );
@@ -281,18 +285,18 @@ async function clickAndCollectSummary(page, status, onGroup, send) {
 
   const summaryUrl = page.url();
 
-  for (let j = 0; j < matchingIndices.length; j++) {
-    const idx = matchingIndices[j];
-    send('status', { message: `Opening issue ${j + 1} of ${matchingIndices.length}...` });
+  for (let j = 0; j < matchingRows.length; j++) {
+    const { i: idx, label: issueLabel } = matchingRows[j];
+    send('status', { message: `Opening issue ${j + 1} of ${matchingRows.length}: ${issueLabel}` });
     try {
       await page.locator('table tbody tr').nth(idx).click();
       await page.waitForTimeout(4000);
 
-      send('status', { message: `Scraping URL groups for issue ${j + 1}...` });
-      await clickAndCollect(page, onGroup);
+      send('status', { message: `Scraping URL groups for: ${issueLabel}` });
+      await clickAndCollect(page, (group) => onGroup({ ...group, issueLabel }));
 
       // Return to summary for next issue
-      if (j < matchingIndices.length - 1) {
+      if (j < matchingRows.length - 1) {
         await page.goto(summaryUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
         await page.waitForTimeout(2500);
       }
@@ -404,6 +408,17 @@ async function clickAndCollect(page, onGroup = () => {}) {
   // Try to show 100 rows at once to minimise pagination
   await selectMaxRowsPerPage(page);
 
+  // Read table header to know which metric column is already shown in the table
+  const tableMetricKey = await page.evaluate(() => {
+    const headers = Array.from(document.querySelectorAll('table thead th, table thead td'));
+    const headerText = headers.map(h => h.innerText?.trim().toLowerCase()).join('|');
+    if (headerText.includes('cls')) return 'cls';
+    if (headerText.includes('inp')) return 'inp';
+    if (headerText.includes('lcp')) return 'lcp';
+    return null;
+  }).catch(() => null);
+  console.log(`[drilldown] table metric column detected: ${tableMetricKey}`);
+
   while (hasMore) {
     const rowData = await page.evaluate(() =>
       Array.from(document.querySelectorAll('table tbody tr')).map((row) => {
@@ -411,7 +426,9 @@ async function clickAndCollect(page, onGroup = () => {}) {
         const urlEl = row.querySelector('a') || cells[0];
         const url = urlEl?.href || urlEl?.innerText?.trim() || '';
         const pop = parseInt((cells[1]?.innerText || '').replace(/,/g, ''), 10) || null;
-        return { url, pop };
+        // cells[2] already contains the metric value (Group CLS / Group INP / Group LCP)
+        const tableMetric = cells[2]?.innerText?.trim() || null;
+        return { url, pop, tableMetric };
       }).filter(r => r.url.startsWith('http'))
     );
 
@@ -423,7 +440,7 @@ async function clickAndCollect(page, onGroup = () => {}) {
     // care about visual coverage. We still go one-by-one so the panel state
     // is predictable and XSBInd responses map cleanly to their row.
     for (let i = 0; i < rowData.length; i++) {
-      const { url: exampleUrl, pop: population } = rowData[i];
+      const { url: exampleUrl, pop: population, tableMetric } = rowData[i];
       let lcp = null, cls = null, inp = null, rowStatus = null;
 
       // Register listener BEFORE clicking
@@ -462,6 +479,17 @@ async function clickAndCollect(page, onGroup = () => {}) {
         ({ lcp, cls, inp, status: rowStatus } = parseXSBInd(capturedText));
       } else {
         console.warn(`[drilldown] row ${i}: no XSBInd within 5s`);
+      }
+
+      // Fill metric from the table cell if XSBInd didn't provide it
+      if (tableMetric && tableMetric !== '—') {
+        if (tableMetricKey === 'cls' && !cls) cls = tableMetric;
+        else if (tableMetricKey === 'inp' && !inp) inp = tableMetric;
+        else if (tableMetricKey === 'lcp' && !lcp) lcp = tableMetric;
+        // Auto-detect by format as final fallback
+        else if (!cls && /^\d+\.\d+$/.test(tableMetric)) cls = tableMetric;
+        else if (!inp && /^\d+ms$/i.test(tableMetric)) inp = tableMetric;
+        else if (!lcp && /^\d+(\.\d+)?s$/i.test(tableMetric)) lcp = tableMetric;
       }
 
       // Close the detail panel so the next row is accessible
