@@ -293,7 +293,10 @@ async function clickAndCollectSummary(page, status, onGroup, send) {
       await page.waitForTimeout(4000);
 
       send('status', { message: `Scraping URL groups for: ${issueLabel}` });
-      await clickAndCollect(page, (group) => onGroup({ ...group, issueLabel }));
+      // Override per-row status with the known parent status (needs-improvement/poor).
+      // XSBInd returns the *overall* CWV status which can be "good" even when one
+      // metric is flagged — misleading when the user drilled in from a specific card.
+      await clickAndCollect(page, (group) => onGroup({ ...group, issueLabel, status }));
 
       // Return to summary for next issue
       if (j < matchingRows.length - 1) {
@@ -408,13 +411,20 @@ async function clickAndCollect(page, onGroup = () => {}) {
   // Try to show 100 rows at once to minimise pagination
   await selectMaxRowsPerPage(page);
 
-  // Read table header to know which metric column is already shown in the table
+  // Read header from the main data table only (first table that has tbody rows)
+  // to know which metric column is already pre-populated in the table (Group CLS / Group INP / Group LCP).
+  // We must NOT query all table headers globally — the GSC page includes a summary section
+  // whose headers contain "CLS issue" text which would give false positives.
   const tableMetricKey = await page.evaluate(() => {
-    const headers = Array.from(document.querySelectorAll('table thead th, table thead td'));
-    const headerText = headers.map(h => h.innerText?.trim().toLowerCase()).join('|');
-    if (headerText.includes('cls')) return 'cls';
-    if (headerText.includes('inp')) return 'inp';
-    if (headerText.includes('lcp')) return 'lcp';
+    for (const table of document.querySelectorAll('table')) {
+      if (!table.querySelector('tbody tr')) continue; // skip tables with no data rows
+      const headerText = Array.from(table.querySelectorAll('thead th, thead td'))
+        .map(h => h.innerText?.trim().toLowerCase()).join('|');
+      if (headerText.includes('cls')) return 'cls';
+      if (headerText.includes('inp')) return 'inp';
+      if (headerText.includes('lcp')) return 'lcp';
+      break; // only check the first data table
+    }
     return null;
   }).catch(() => null);
   console.log(`[drilldown] table metric column detected: ${tableMetricKey}`);
