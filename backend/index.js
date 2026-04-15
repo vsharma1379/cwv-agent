@@ -11,16 +11,23 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const authRoutes = require('./routes/auth');
-const cwvRoutes = require('./routes/cwv');
+const authRoutes       = require('./routes/auth');
+const cwvRoutes        = require('./routes/cwv');
 const gscScraperRoutes = require('./routes/gsc-scraper');
+const cwvDbRoutes      = require('./routes/cwv-db');
 
 app.use('/api/auth', authRoutes);
 app.use('/api', cwvRoutes);
 app.use('/api', gscScraperRoutes);
+app.use('/api', cwvDbRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
-app.listen(PORT, () => {
-  console.log(`CWV Backend running on http://localhost:${PORT}`);
-});
+const { initDB } = require('./db');
+initDB()
+  .then(() => app.listen(PORT, () => console.log(`CWV Backend running on http://localhost:${PORT}`)))
+  .catch(err => {
+    console.error('DB init failed:', err.message);
+    console.warn('Starting without DB — MySQL routes will fail until DB is available');
+    app.listen(PORT, () => console.log(`CWV Backend running on http://localhost:${PORT} (no DB)`));
+  });

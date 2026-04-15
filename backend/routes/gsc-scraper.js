@@ -83,13 +83,46 @@ router.post('/gsc-scrape', async (req, res) => {
   }
 });
 
+// Exported: scrape drilldown for one site+device+status, call onGroup per row
+async function scrapeGSCDrilldown(siteUrl, device, status, onGroup = () => {}, onStatus = () => {}) {
+  if (!fs.existsSync(PROFILE_DIR)) throw new Error('Browser not set up. Run GSC Setup first.');
+  const context = await launchBrowser(true);
+  const page = await context.newPage();
+  const encodedSite = encodeURIComponent(siteUrl);
+  const deviceParam = DEVICE_PARAM[device] || '2';
+
+  try {
+    if (status === 'good') {
+      const drillUrl = `https://search.google.com/search-console/core-web-vitals/drilldown?resource_id=${encodedSite}&device=${deviceParam}`;
+      await page.goto(drillUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      if (page.url().includes('accounts.google.com')) {
+        fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
+        throw new Error('Session expired. Please run setup again.');
+      }
+      await page.waitForSelector('table tbody tr', { timeout: 12000 }).catch(() => {});
+      onStatus('Page loaded, scraping Good URL groups...');
+      await clickAndCollect(page, onGroup);
+    } else {
+      const summaryUrl = `https://search.google.com/search-console/core-web-vitals/summary?resource_id=${encodedSite}&device=${deviceParam}`;
+      await page.goto(summaryUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      if (page.url().includes('accounts.google.com')) {
+        fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
+        throw new Error('Session expired. Please run setup again.');
+      }
+      await page.waitForSelector('table tbody tr', { timeout: 12000 }).catch(() => {});
+      onStatus('Summary page loaded, finding issues...');
+      await clickAndCollectSummary(page, status, onGroup, (_, d) => onStatus(d?.message || ''));
+    }
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
 // GET /api/gsc-scrape-drilldown?siteUrl=&device=&status= — SSE stream of URL groups
 router.get('/gsc-scrape-drilldown', async (req, res) => {
   const { siteUrl, device = 'Mobile', status = 'good' } = req.query;
   if (!siteUrl) return res.status(400).json({ error: 'siteUrl is required' });
-  if (!fs.existsSync(PROFILE_DIR)) return res.status(401).json({ error: 'Browser not set up.' });
 
-  // SSE headers — keeps connection alive while we scrape
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -102,47 +135,15 @@ router.get('/gsc-scrape-drilldown', async (req, res) => {
     try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch {}
   };
 
-  let context;
   try {
-    context = await launchBrowser(true);
-    const page = await context.newPage();
-
-    const encodedSite = encodeURIComponent(siteUrl);
-    const deviceParam = DEVICE_PARAM[device] || '2';
-
-    if (status === 'good') {
-      // Good URLs have a dedicated drilldown page
-      const drillUrl = `https://search.google.com/search-console/core-web-vitals/drilldown?resource_id=${encodedSite}&device=${deviceParam}`;
-      await page.goto(drillUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      if (page.url().includes('accounts.google.com')) {
-        await context.close();
-        fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
-        send('error', { error: 'Session expired. Please run setup again.' });
-        return res.end();
-      }
-      await page.waitForSelector('table tbody tr', { timeout: 12000 }).catch(() => {});
-      send('status', { message: 'Page loaded, scraping Good URL groups...' });
-      await clickAndCollect(page, (group) => send('group', group));
-    } else {
-      // NI and Poor are per-issue on the summary page
-      const summaryUrl = `https://search.google.com/search-console/core-web-vitals/summary?resource_id=${encodedSite}&device=${deviceParam}`;
-      await page.goto(summaryUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-      if (page.url().includes('accounts.google.com')) {
-        await context.close();
-        fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
-        send('error', { error: 'Session expired. Please run setup again.' });
-        return res.end();
-      }
-      await page.waitForSelector('table tbody tr', { timeout: 12000 }).catch(() => {});
-      send('status', { message: 'Summary page loaded, finding issues...' });
-      await clickAndCollectSummary(page, status, (group) => send('group', group), send);
-    }
-
-    await context.close();
+    await scrapeGSCDrilldown(
+      siteUrl, device, status,
+      (group) => send('group', group),
+      (msg)   => send('status', { message: msg }),
+    );
     send('done', { scrapedAt: new Date().toISOString() });
     res.end();
   } catch (err) {
-    if (context) await context.close().catch(() => {});
     console.error('[gsc-drilldown] Error:', err.message);
     send('error', { error: err.message });
     res.end();
@@ -500,4 +501,47 @@ async function clickAndCollect(page, onGroup = () => {}) {
   return allGroups;
 }
 
+// Lightweight: open GSC overview, read gscDate, close. No drilldown scraping.
+async function getGscLastUpdatedDate(siteUrl) {
+  if (!fs.existsSync(PROFILE_DIR)) throw new Error('Browser not set up.');
+  const context = await launchBrowser(true);
+  const page = await context.newPage();
+  try {
+    const encodedSite = encodeURIComponent(siteUrl);
+    await page.goto(
+      `https://search.google.com/search-console/core-web-vitals?resource_id=${encodedSite}`,
+      { waitUntil: 'domcontentloaded', timeout: 45000 }
+    );
+    if (page.url().includes('accounts.google.com')) {
+      fs.rmSync(PROFILE_DIR, { recursive: true, force: true });
+      throw new Error('Session expired. Please run setup again.');
+    }
+    await page.waitForTimeout(4000);
+    const { gscDate } = await extractOverviewCounts(page);
+    return gscDate; // e.g. "4/12/26"
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
+
+// Normalise whatever GSC returns ("4/12/26", "Apr 12, 2026", etc.) → "YYYY-MM-DD"
+function normaliseGscDate(raw) {
+  if (!raw) return null;
+  // M/D/YY or M/D/YYYY
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (slash) {
+    let [, m, d, y] = slash;
+    if (y.length === 2) y = '20' + y;
+    return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  // Try native Date parse as fallback
+  const parsed = new Date(raw);
+  if (!isNaN(parsed)) return parsed.toISOString().slice(0, 10);
+  return raw; // return as-is if unparseable
+}
+
 module.exports = router;
+module.exports.scrapeGSCDrilldown = scrapeGSCDrilldown;
+module.exports.getGscLastUpdatedDate = getGscLastUpdatedDate;
+module.exports.normaliseGscDate = normaliseGscDate;
+module.exports.PROFILE_DIR = PROFILE_DIR;
