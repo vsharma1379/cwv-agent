@@ -296,7 +296,12 @@ async function clickAndCollectSummary(page, status, onGroup, send) {
       // Override per-row status with the known parent status (needs-improvement/poor).
       // XSBInd returns the *overall* CWV status which can be "good" even when one
       // metric is flagged — misleading when the user drilled in from a specific card.
-      await clickAndCollect(page, (group) => onGroup({ ...group, issueLabel, status }));
+      // Derive metric hint from issueLabel so clickAndCollect doesn't need to guess from DOM headers
+      const metricHint = /\bcls\b/i.test(issueLabel) ? 'cls'
+                       : /\binp\b/i.test(issueLabel) ? 'inp'
+                       : /\blcp\b/i.test(issueLabel) ? 'lcp'
+                       : null;
+      await clickAndCollect(page, (group) => onGroup({ ...group, issueLabel, status }), metricHint);
 
       // Return to summary for next issue
       if (j < matchingRows.length - 1) {
@@ -403,31 +408,16 @@ function parseXSBInd(text) {
   } catch { return {}; }
 }
 
-// Click all rows rapidly, collect XSBInd responses in parallel, emit groups as they resolve
-async function clickAndCollect(page, onGroup = () => {}) {
+// Collect URL groups from a GSC drilldown page.
+// metricHint: 'cls'|'inp'|'lcp'|null — when set (issue-specific drilldown), reads metric
+// directly from cells[2] without clicking rows. When null (good drilldown), clicks each row
+// to capture XSBInd which returns all three metric values.
+async function clickAndCollect(page, onGroup = () => {}, metricHint = null) {
   const allGroups = [];
   let hasMore = true;
 
-  // Try to show 100 rows at once to minimise pagination
   await selectMaxRowsPerPage(page);
-
-  // Read header from the main data table only (first table that has tbody rows)
-  // to know which metric column is already pre-populated in the table (Group CLS / Group INP / Group LCP).
-  // We must NOT query all table headers globally — the GSC page includes a summary section
-  // whose headers contain "CLS issue" text which would give false positives.
-  const tableMetricKey = await page.evaluate(() => {
-    for (const table of document.querySelectorAll('table')) {
-      if (!table.querySelector('tbody tr')) continue; // skip tables with no data rows
-      const headerText = Array.from(table.querySelectorAll('thead th, thead td'))
-        .map(h => h.innerText?.trim().toLowerCase()).join('|');
-      if (headerText.includes('cls')) return 'cls';
-      if (headerText.includes('inp')) return 'inp';
-      if (headerText.includes('lcp')) return 'lcp';
-      break; // only check the first data table
-    }
-    return null;
-  }).catch(() => null);
-  console.log(`[drilldown] table metric column detected: ${tableMetricKey}`);
+  console.log(`[drilldown] metricHint=${metricHint} — ${metricHint ? 'read-only (no clicks)' : 'XSBInd mode'}`);
 
   while (hasMore) {
     const rowData = await page.evaluate(() =>
@@ -436,7 +426,6 @@ async function clickAndCollect(page, onGroup = () => {}) {
         const urlEl = row.querySelector('a') || cells[0];
         const url = urlEl?.href || urlEl?.innerText?.trim() || '';
         const pop = parseInt((cells[1]?.innerText || '').replace(/,/g, ''), 10) || null;
-        // cells[2] already contains the metric value (Group CLS / Group INP / Group LCP)
         const tableMetric = cells[2]?.innerText?.trim() || null;
         return { url, pop, tableMetric };
       }).filter(r => r.url.startsWith('http'))
@@ -444,75 +433,75 @@ async function clickAndCollect(page, onGroup = () => {}) {
 
     if (rowData.length === 0) break;
 
-    // ── Sequential with JS-native clicks ────────────────────────────────────
-    // Playwright visibility checks fail once a detail panel is open.
-    // page.evaluate → elem.click() bypasses that entirely since JS doesn't
-    // care about visual coverage. We still go one-by-one so the panel state
-    // is predictable and XSBInd responses map cleanly to their row.
-    for (let i = 0; i < rowData.length; i++) {
-      const { url: exampleUrl, pop: population, tableMetric } = rowData[i];
-      let lcp = null, cls = null, inp = null, rowStatus = null;
-
-      // Register listener BEFORE clicking
-      let done = false;
-      let resolveCapture;
-      const capturePromise = new Promise(r => { resolveCapture = r; });
-      const tid = setTimeout(() => {
-        if (done) return;
-        done = true;
-        page.off('response', xsbHandler);
-        resolveCapture(null);
-      }, 5000); // 5 s — XSBInd normally arrives in < 2 s
-
-      const xsbHandler = async (response) => {
-        if (done || !response.url().includes('batchexecute')) return;
-        try {
-          const text = await response.text();
-          if (text.includes('XSBInd')) {
-            done = true;
-            clearTimeout(tid);
-            page.off('response', xsbHandler);
-            resolveCapture(text);
-          }
-        } catch {}
-      };
-      page.on('response', xsbHandler);
-
-      // Native JS click — ignores panel overlays and GSC's visibility state
-      await page.evaluate((idx) => {
-        const row = document.querySelectorAll('table tbody tr')[idx];
-        if (row) row.click();
-      }, i);
-
-      const capturedText = await capturePromise;
-      if (capturedText) {
-        ({ lcp, cls, inp, status: rowStatus } = parseXSBInd(capturedText));
-      } else {
-        console.warn(`[drilldown] row ${i}: no XSBInd within 5s`);
+    if (metricHint) {
+      // ── Issue-specific drilldown (CLS/INP/LCP issue page) ───────────────────
+      // The metric value is already in cells[2] — no clicking needed.
+      // Escape-triggered deferred batchexecute calls caused wrong values when clicking.
+      for (const { url: exampleUrl, pop: population, tableMetric } of rowData) {
+        let lcp = null, cls = null, inp = null;
+        if (tableMetric && tableMetric !== '—') {
+          if (metricHint === 'cls') cls = tableMetric;
+          else if (metricHint === 'inp') inp = tableMetric;
+          else if (metricHint === 'lcp') lcp = tableMetric;
+        }
+        console.log(`[drilldown] ${metricHint.toUpperCase()}:${tableMetric} — ${exampleUrl}`);
+        const group = { exampleUrl, population, lcp, cls, inp, status: null };
+        allGroups.push(group);
+        onGroup(group);
       }
+    } else {
+      // ── Good drilldown — click each row to get XSBInd (all 3 metrics) ───────
+      for (let i = 0; i < rowData.length; i++) {
+        const { url: exampleUrl, pop: population } = rowData[i];
+        let lcp = null, cls = null, inp = null, rowStatus = null;
 
-      // Fill metric from the table cell if XSBInd didn't provide it
-      if (tableMetric && tableMetric !== '—') {
-        if (tableMetricKey === 'cls' && !cls) cls = tableMetric;
-        else if (tableMetricKey === 'inp' && !inp) inp = tableMetric;
-        else if (tableMetricKey === 'lcp' && !lcp) lcp = tableMetric;
-        // Auto-detect by format as final fallback
-        else if (!cls && /^\d+\.\d+$/.test(tableMetric)) cls = tableMetric;
-        else if (!inp && /^\d+ms$/i.test(tableMetric)) inp = tableMetric;
-        else if (!lcp && /^\d+(\.\d+)?s$/i.test(tableMetric)) lcp = tableMetric;
+        let done = false;
+        let resolveCapture;
+        const capturePromise = new Promise(r => { resolveCapture = r; });
+        const tid = setTimeout(() => {
+          if (done) return;
+          done = true;
+          page.off('response', xsbHandler);
+          resolveCapture(null);
+        }, 5000);
+
+        const xsbHandler = async (response) => {
+          if (done || !response.url().includes('batchexecute')) return;
+          try {
+            const text = await response.text();
+            if (text.includes('XSBInd')) {
+              done = true;
+              clearTimeout(tid);
+              page.off('response', xsbHandler);
+              resolveCapture(text);
+            }
+          } catch {}
+        };
+        page.on('response', xsbHandler);
+
+        await page.evaluate((idx) => {
+          const row = document.querySelectorAll('table tbody tr')[idx];
+          if (row) row.click();
+        }, i);
+
+        const capturedText = await capturePromise;
+        if (capturedText) {
+          ({ lcp, cls, inp, status: rowStatus } = parseXSBInd(capturedText));
+        } else {
+          console.warn(`[drilldown] row ${i}: no XSBInd within 5s`);
+        }
+
+        try { await page.keyboard.press('Escape'); } catch {}
+        await page.waitForTimeout(200);
+
+        console.log(`[drilldown] row ${i} LCP:${lcp} CLS:${cls} INP:${inp}`);
+        const group = { exampleUrl, population, lcp, cls, inp, status: rowStatus };
+        allGroups.push(group);
+        onGroup(group);
       }
-
-      // Close the detail panel so the next row is accessible
-      try { await page.keyboard.press('Escape'); } catch {}
-      await page.waitForTimeout(200);
-
-      console.log(`[drilldown] row ${i} LCP:${lcp} CLS:${cls} INP:${inp}`);
-      const group = { exampleUrl, population, lcp, cls, inp, status: rowStatus };
-      allGroups.push(group);
-      onGroup(group);
     }
 
-    // ── Pagination ───────────────────────────────────────────────────────────
+    // ── Pagination (same for both paths) ────────────────────────────────────
     hasMore = false;
     try {
       const nextBtn = page.locator('[data-paginate="next"]').first();
