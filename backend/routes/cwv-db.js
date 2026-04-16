@@ -21,13 +21,12 @@ async function saveGroups(siteUrl, device, status, groups, scrapedAt, gscDate) {
   if (!groups.length) return;
   const conn = await pool.getConnection();
   try {
-    // Delete existing rows for this site+device+status+date before inserting
-    // so re-running a scrape never creates duplicates
-    const date = scrapedAt.slice(0, 10); // "YYYY-MM-DD"
+    // Delete all existing rows for this site+device+status+gsc_date before inserting
+    // so re-scraping always replaces stale data for the same GSC date
     await conn.execute(
       `DELETE FROM cwv_url_groups
-       WHERE site_url = ? AND device = ? AND status = ? AND DATE(scraped_at) = ?`,
-      [siteUrl, device, status, date]
+       WHERE site_url = ? AND device = ? AND status = ? AND gsc_date = ?`,
+      [siteUrl, device, status, gscDate]
     );
 
     const values = groups.map(g => [
@@ -40,12 +39,13 @@ async function saveGroups(siteUrl, device, status, groups, scrapedAt, gscDate) {
       g.cls ?? null,
       g.inp ?? null,
       g.status ?? null,
+      g.issueLabel ?? '',
       gscDate ?? null,
       scrapedAt,
     ]);
     await conn.query(
-      `INSERT IGNORE INTO cwv_url_groups
-         (site_url, device, status, example_url, population, lcp, cls, inp, row_status, gsc_date, scraped_at)
+      `INSERT INTO cwv_url_groups
+         (site_url, device, status, example_url, population, lcp, cls, inp, row_status, issue_label, gsc_date, scraped_at)
        VALUES ?`,
       [values]
     );
@@ -204,21 +204,23 @@ router.get('/cwv-db/dates', async (req, res) => {
   }
 });
 
-// GET /api/cwv-db/url-groups?siteUrl=&device=&status=&date=  (date = gsc_date)
+// GET /api/cwv-db/url-groups?siteUrl=&date=&device=&status=  (device and status are optional)
 router.get('/cwv-db/url-groups', async (req, res) => {
-  const { siteUrl, device = 'Mobile', status = 'good', date } = req.query;
+  const { siteUrl, date, device, status } = req.query;
   if (!siteUrl) return res.status(400).json({ error: 'siteUrl is required' });
   if (!date)    return res.status(400).json({ error: 'date is required' });
   try {
-    const [rows] = await pool.execute(
-      `SELECT example_url, population, lcp, cls, inp, row_status, gsc_date, scraped_at
+    const conditions = ['site_url = ?', 'gsc_date = ?'];
+    const params = [siteUrl, date];
+    if (device) { conditions.push('device = ?'); params.push(device); }
+    if (status) { conditions.push('status = ?'); params.push(status); }
+
+    const [rows] = await pool.query(
+      `SELECT device, status, issue_label, example_url, population, lcp, cls, inp, row_status, gsc_date, scraped_at
        FROM cwv_url_groups
-       WHERE site_url = ?
-         AND device   = ?
-         AND status   = ?
-         AND gsc_date = ?
-       ORDER BY population DESC`,
-      [siteUrl, device, status, date]
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY device, status, issue_label, population DESC`,
+      params
     );
     res.json({ rows, total: rows.length });
   } catch (err) {

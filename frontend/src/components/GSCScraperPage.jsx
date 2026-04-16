@@ -266,13 +266,16 @@ export default function GSCScraperPage({ auth, onLogout }) {
 function DBHistoryView({ siteUrl }) {
   const [dates, setDates] = useState([]);
   const [selectedDate, setSelectedDate] = useState('');
-  const [device, setDevice] = useState('Mobile');
-  const [cwvStatus, setCwvStatus] = useState('good');
-  const [rows, setRows] = useState([]);
+  const [allRows, setAllRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState('');
+
+  // Client-side filters
+  const [deviceFilter, setDeviceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [filterPattern, setFilterPattern] = useState('');
 
   const statusColor = { good: '#1e8e3e', 'needs-improvement': '#f29900', poor: '#d93025' };
   const statusLabel = { good: 'Good', 'needs-improvement': 'Needs Improvement', poor: 'Poor' };
@@ -281,7 +284,7 @@ function DBHistoryView({ siteUrl }) {
     if (!siteUrl) return;
     setDates([]);
     setSelectedDate('');
-    setRows([]);
+    setAllRows([]);
     axios.get(`${API}/cwv-db/dates`, { params: { siteUrl } })
       .then(({ data }) => {
         setDates(data);
@@ -290,24 +293,24 @@ function DBHistoryView({ siteUrl }) {
       .catch(e => setError(e.response?.data?.error || e.message));
   }, [siteUrl]);
 
+  // Load ALL rows for the selected date (no device/status filter on API)
   useEffect(() => {
     if (!siteUrl || !selectedDate) return;
     setLoading(true);
     setError('');
-    axios.get(`${API}/cwv-db/url-groups`, { params: { siteUrl, device, status: cwvStatus, date: selectedDate } })
-      .then(({ data }) => setRows(data.rows || []))
+    axios.get(`${API}/cwv-db/url-groups`, { params: { siteUrl, date: selectedDate } })
+      .then(({ data }) => setAllRows(data.rows || []))
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoading(false));
-  }, [siteUrl, selectedDate, device, cwvStatus]);
+  }, [siteUrl, selectedDate]);
 
   const triggerScrape = async () => {
     if (!siteUrl) return;
     setTriggerLoading(true);
     setTriggerMsg('');
     try {
-      const { data } = await axios.post(`${API}/cwv-db/trigger-scrape`, { siteUrl });
+      const { data } = await axios.post(`${API}/cwv-db/trigger-scrape`, { siteUrl, force: true });
       setTriggerMsg(data.message);
-      // If new data was found and scrape started, auto-refresh dates after 3 min
       if (!data.skipped) {
         setTimeout(async () => {
           const { data: d } = await axios.get(`${API}/cwv-db/dates`, { params: { siteUrl } });
@@ -322,16 +325,29 @@ function DBHistoryView({ siteUrl }) {
     }
   };
 
-  const [filterPattern, setFilterPattern] = useState('');
+  // Summary counts per device/status
+  const summary = allRows.reduce((acc, r) => {
+    const key = `${r.device}|${r.status}`;
+    if (!acc[key]) acc[key] = { device: r.device, status: r.status, groups: 0, urls: 0 };
+    acc[key].groups++;
+    acc[key].urls += r.population || 0;
+    return acc;
+  }, {});
+
+  // Client-side filtering
+  let filtered = allRows;
+  if (deviceFilter !== 'all') filtered = filtered.filter(r => r.device === deviceFilter);
+  if (statusFilter !== 'all') filtered = filtered.filter(r => r.status === statusFilter);
+
   let regexError = '';
-  let filtered = rows;
   if (filterPattern) {
     try {
       const re = new RegExp(filterPattern, 'i');
-      filtered = rows.filter(r => re.test(r.example_url));
+      filtered = filtered.filter(r => re.test(r.example_url));
     } catch (e) { regexError = e.message; }
   }
-  const totalUrls = rows.reduce((s, r) => s + (r.population || 0), 0);
+
+  const totalUrls = allRows.reduce((s, r) => s + (r.population || 0), 0);
   const filteredUrls = filtered.reduce((s, r) => s + (r.population || 0), 0);
 
   if (!siteUrl) return (
@@ -348,11 +364,13 @@ function DBHistoryView({ siteUrl }) {
             : dates.map(d => <option key={d} value={d}>{d}</option>)
           }
         </select>
-        <select className="site-select" value={device} onChange={e => setDevice(e.target.value)}>
-          <option>Mobile</option>
-          <option>Desktop</option>
+        <select className="site-select" value={deviceFilter} onChange={e => setDeviceFilter(e.target.value)}>
+          <option value="all">All Devices</option>
+          <option value="Mobile">Mobile</option>
+          <option value="Desktop">Desktop</option>
         </select>
-        <select className="site-select" value={cwvStatus} onChange={e => setCwvStatus(e.target.value)}>
+        <select className="site-select" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <option value="all">All Statuses</option>
           <option value="good">Good</option>
           <option value="needs-improvement">Needs Improvement</option>
           <option value="poor">Poor</option>
@@ -365,15 +383,55 @@ function DBHistoryView({ siteUrl }) {
       {triggerMsg && <div className="scraper-info" style={{ margin: '0 0 12px' }}>{triggerMsg}</div>}
       {error && <div className="error-banner" style={{ marginBottom: 12 }}>{error}</div>}
 
+      {/* Summary cards */}
+      {!loading && allRows.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+          {['Mobile', 'Desktop'].map(dev =>
+            ['good', 'needs-improvement', 'poor'].map(st => {
+              const key = `${dev}|${st}`;
+              const s = summary[key];
+              if (!s) return null;
+              const isActive = deviceFilter === dev && statusFilter === st;
+              return (
+                <div
+                  key={key}
+                  onClick={() => {
+                    setDeviceFilter(isActive ? 'all' : dev);
+                    setStatusFilter(isActive ? 'all' : st);
+                  }}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: `2px solid ${isActive ? statusColor[st] : '#e0e0e0'}`,
+                    background: isActive ? statusColor[st] + '15' : '#fafafa',
+                    cursor: 'pointer',
+                    minWidth: 120,
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: '#9aa0a6', marginBottom: 2 }}>{dev}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: statusColor[st] }}>{statusLabel[st]}</div>
+                  <div style={{ fontSize: 12, color: '#5f6368', marginTop: 2 }}>
+                    {s.groups} groups · {s.urls.toLocaleString()} URLs
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
       <div className="table-wrapper">
         <div className="table-header-row">
           <h2 className="table-title">
-            {device} · <span style={{ color: statusColor[cwvStatus] }}>{statusLabel[cwvStatus]}</span> — {selectedDate || '—'}
+            {deviceFilter === 'all' ? 'All Devices' : deviceFilter}
+            {' · '}
+            {statusFilter === 'all'
+              ? 'All Statuses'
+              : <span style={{ color: statusColor[statusFilter] }}>{statusLabel[statusFilter]}</span>}
+            {' — '}{selectedDate || '—'}
           </h2>
           <span className="table-count">
-            {filterPattern
-              ? <>{filtered.length} / {rows.length} groups · {filteredUrls.toLocaleString()} / {totalUrls.toLocaleString()} URLs</>
-              : <>{rows.length} groups · {totalUrls.toLocaleString()} URLs</>}
+            {filtered.length} / {allRows.length} groups · {filteredUrls.toLocaleString()} / {totalUrls.toLocaleString()} URLs
           </span>
         </div>
 
@@ -403,18 +461,31 @@ function DBHistoryView({ siteUrl }) {
             <table className="cwv-table">
               <thead>
                 <tr>
-                  <th className="th-url">Example URL</th>
+                  <th className="th-metric">Device</th>
+                  <th className="th-metric">Status</th>
+                  <th className="th-url">Issue / Example URL</th>
                   <th className="th-metric">Group Size</th>
                   <th className="th-metric">LCP</th>
                   <th className="th-metric">CLS</th>
                   <th className="th-metric">INP</th>
-                  <th className="th-metric">Row Status</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((r, i) => (
                   <tr key={i} className="tr-row">
+                    <td className="td-source">{r.device}</td>
+                    <td>
+                      <span className="status-dot" style={{
+                        background: (statusColor[r.status] || '#9aa0a6') + '20',
+                        color: statusColor[r.status] || '#9aa0a6',
+                      }}>
+                        {statusLabel[r.status] || r.status}
+                      </span>
+                    </td>
                     <td className="td-url" title={r.example_url}>
+                      {r.issue_label && (
+                        <div style={{ fontSize: 11, color: '#9aa0a6', marginBottom: 2 }}>{r.issue_label}</div>
+                      )}
                       <a href={r.example_url} target="_blank" rel="noreferrer">
                         {r.example_url.replace(/^https?:\/\/[^/]+/, '') || '/'}
                       </a>
@@ -423,16 +494,6 @@ function DBHistoryView({ siteUrl }) {
                     <td className="td-source">{r.lcp ?? '—'}</td>
                     <td className="td-source">{r.cls ?? '—'}</td>
                     <td className="td-source">{r.inp ?? '—'}</td>
-                    <td>
-                      {r.row_status ? (
-                        <span className="status-dot" style={{
-                          background: (statusColor[r.row_status] || '#9aa0a6') + '20',
-                          color: statusColor[r.row_status] || '#9aa0a6',
-                        }}>
-                          {statusLabel[r.row_status] || r.row_status}
-                        </span>
-                      ) : '—'}
-                    </td>
                   </tr>
                 ))}
               </tbody>
