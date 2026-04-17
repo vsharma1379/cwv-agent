@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import SiteSelector from './SiteSelector';
+import GSCTrendChart from './GSCTrendChart';
 
 const API = '/api';
 
@@ -276,6 +277,7 @@ function DBHistoryView({ siteUrl }) {
   const [deviceFilter, setDeviceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [filterPattern, setFilterPattern] = useState('');
+  const [trendRow, setTrendRow] = useState(null); // { urlPattern, device, status }
 
   const statusColor = { good: '#1e8e3e', 'needs-improvement': '#f29900', poor: '#d93025' };
   const statusLabel = { good: 'Good', 'needs-improvement': 'Needs Improvement', poor: 'Poor' };
@@ -468,6 +470,7 @@ function DBHistoryView({ siteUrl }) {
                   <th className="th-metric">LCP</th>
                   <th className="th-metric">CLS</th>
                   <th className="th-metric">INP</th>
+                  <th className="th-metric">Trend</th>
                 </tr>
               </thead>
               <tbody>
@@ -494,6 +497,17 @@ function DBHistoryView({ siteUrl }) {
                     <td className="td-source">{r.lcp ?? '—'}</td>
                     <td className="td-source">{r.cls ?? '—'}</td>
                     <td className="td-source">{r.inp ?? '—'}</td>
+                    <td>
+                      {r.url_pattern && (
+                        <button
+                          className="btn-copy"
+                          title={`Trend for ${r.url_pattern}`}
+                          onClick={() => setTrendRow({ urlPattern: r.url_pattern, exampleUrl: r.example_url, device: r.device, status: r.status })}
+                        >
+                          📈
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -501,6 +515,17 @@ function DBHistoryView({ siteUrl }) {
           </div>
         )}
       </div>
+
+      {trendRow && (
+        <GSCTrendChart
+          siteUrl={siteUrl}
+          urlPattern={trendRow.urlPattern}
+          exampleUrl={trendRow.exampleUrl}
+          device={trendRow.device}
+          status={trendRow.status}
+          onClose={() => setTrendRow(null)}
+        />
+      )}
     </div>
   );
 }

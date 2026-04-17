@@ -11,6 +11,33 @@ const STATUSES = ['good', 'needs-improvement', 'poor'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Derive a stable URL pattern from an example URL.
+// The pattern is used to track the same "group" across days even when GSC
+// picks a different example URL (e.g. /reviews/sbp-consulting → /reviews/xyz).
+// Rules:
+//   - Leaf segment (last) → always replaced with *
+//   - Intermediate segment → replaced with * if it contains hyphens or digits (slug-like)
+//   - Short, plain-word intermediate segments (reviews, jobs, companies...) kept as-is
+// Examples:
+//   /reviews/sbp-consulting-reviews   → /reviews/*
+//   /overview/tcs                     → /overview/*
+//   /companies/tcs/reviews            → /companies/tcs/*
+//   /salaries/infosys-salary          → /salaries/*
+function derivePattern(exampleUrl) {
+  if (!exampleUrl) return null;
+  try {
+    const { pathname } = new URL(exampleUrl);
+    const segs = pathname.split('/').filter(Boolean);
+    if (segs.length === 0) return '/';
+    return '/' + segs.map((seg, i) => {
+      if (i === segs.length - 1) return '*'; // leaf is always the entity
+      return (seg.includes('-') || /\d/.test(seg)) ? '*' : seg;
+    }).join('/');
+  } catch {
+    return null;
+  }
+}
+
 function getSites() {
   // Comma-separated list in env, e.g. "https://www.ambitionbox.com/,https://example.com/"
   const raw = process.env.GSC_SITES || '';
@@ -34,6 +61,7 @@ async function saveGroups(siteUrl, device, status, groups, scrapedAt, gscDate) {
       device,
       status,
       g.exampleUrl,
+      derivePattern(g.exampleUrl),
       g.population ?? null,
       g.lcp ?? null,
       g.cls ?? null,
@@ -45,7 +73,7 @@ async function saveGroups(siteUrl, device, status, groups, scrapedAt, gscDate) {
     ]);
     await conn.query(
       `INSERT INTO cwv_url_groups
-         (site_url, device, status, example_url, population, lcp, cls, inp, row_status, issue_label, gsc_date, scraped_at)
+         (site_url, device, status, example_url, url_pattern, population, lcp, cls, inp, row_status, issue_label, gsc_date, scraped_at)
        VALUES ?`,
       [values]
     );
@@ -113,6 +141,28 @@ async function runNightlyScrape(siteUrl) {
   }
   console.log(`[cron] done — ${total} rows saved for ${siteUrl} (gsc_date=${gscDateNorm})`);
 }
+
+// ── Backfill url_pattern for rows inserted before the column was added ────────
+async function backfillUrlPatterns() {
+  try {
+    const [rows] = await pool.execute(
+      `SELECT id, example_url FROM cwv_url_groups WHERE url_pattern IS NULL OR url_pattern = '' LIMIT 50000`
+    );
+    if (!rows.length) return;
+    console.log(`[cwv-db] Backfilling url_pattern for ${rows.length} rows...`);
+    for (const row of rows) {
+      const pattern = derivePattern(row.example_url);
+      if (pattern) {
+        await pool.execute(`UPDATE cwv_url_groups SET url_pattern = ? WHERE id = ?`, [pattern, row.id]);
+      }
+    }
+    console.log('[cwv-db] url_pattern backfill complete');
+  } catch (err) {
+    console.error('[cwv-db] backfill error:', err.message);
+  }
+}
+// Run once on startup (non-blocking)
+backfillUrlPatterns();
 
 // ── Cron: midnight every day ──────────────────────────────────────────────────
 // Default: "0 0 * * *" (midnight server time). Override via CRON_SCHEDULE env.
@@ -216,13 +266,62 @@ router.get('/cwv-db/url-groups', async (req, res) => {
     if (status) { conditions.push('status = ?'); params.push(status); }
 
     const [rows] = await pool.query(
-      `SELECT device, status, issue_label, example_url, population, lcp, cls, inp, row_status, gsc_date, scraped_at
+      `SELECT device, status, issue_label, example_url, url_pattern, population, lcp, cls, inp, row_status, gsc_date, scraped_at
        FROM cwv_url_groups
        WHERE ${conditions.join(' AND ')}
        ORDER BY device, status, issue_label, population DESC`,
       params
     );
     res.json({ rows, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/cwv-db/trend?siteUrl=&urlPattern=&exampleUrl=&device=&status=
+// Returns one data point per gsc_date for a specific URL group.
+// exampleUrl narrows the query to that exact URL group so we don't aggregate
+// metrics from unrelated groups that happen to share the same broad url_pattern
+// (e.g. /salaries/* matches both the calculator page and every company salary page).
+// When a URL has multiple issue rows on the same date (LCP issue + CLS issue),
+// we still use MAX so all metrics surface even if split across issue rows.
+router.get('/cwv-db/trend', async (req, res) => {
+  const { siteUrl, urlPattern, exampleUrl, device, status } = req.query;
+  if (!siteUrl)    return res.status(400).json({ error: 'siteUrl is required' });
+  if (!urlPattern) return res.status(400).json({ error: 'urlPattern is required' });
+  if (!device)     return res.status(400).json({ error: 'device is required' });
+  if (!status)     return res.status(400).json({ error: 'status is required' });
+  try {
+    const conditions = [
+      'site_url   = ?',
+      'url_pattern = ?',
+      'device      = ?',
+      'status      = ?',
+      'gsc_date IS NOT NULL',
+    ];
+    const params = [siteUrl, urlPattern, device, status];
+
+    // When an exact example URL is provided, restrict to that specific URL group.
+    // This prevents /salaries/* from aggregating metrics across dozens of unrelated pages.
+    if (exampleUrl) {
+      conditions.push('example_url = ?');
+      params.push(exampleUrl);
+    }
+
+    const [rows] = await pool.query(
+      `SELECT
+         gsc_date,
+         MAX(population)  AS population,
+         MAX(lcp)         AS lcp,
+         MAX(cls)         AS cls,
+         MAX(inp)         AS inp
+       FROM cwv_url_groups
+       WHERE ${conditions.join(' AND ')}
+       GROUP BY gsc_date
+       ORDER BY gsc_date ASC`,
+      params
+    );
+    res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
