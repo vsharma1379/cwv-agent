@@ -11,28 +11,137 @@ const STATUSES = ['good', 'needs-improvement', 'poor'];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Suffixes that identify the TYPE of entity in a URL segment (sorted longest-first
+// so the most specific suffix wins on endsWith checks).
+// e.g. "hdfc-bank-interview-questions" → *-interview-questions
+const ENTITY_TYPE_SUFFIXES = [
+  '-interview-questions',
+  '-salaries',
+  '-salary',
+  '-reviews',
+  '-review',
+  '-overview',
+  '-offices',
+  '-office',
+  '-locations',
+  '-location',
+  '-photos',
+  '-photo',
+  '-benefits',
+  '-benefit',
+  '-discussions',
+  '-discussion',
+  '-interviews',
+  '-interview',
+  '-jobs',
+  '-job',
+  '-working',
+  '-ratings',
+  '-rating',
+  '-designations',
+  '-designation',
+  '-people',
+  '-about',
+  '-organisations',
+  '-organisation',
+];
+
+// Plain single-word structural terms — section/page-type words that are NOT
+// variable entity values. Always kept verbatim.
+const STRUCTURAL_WORDS = new Set([
+  'salaries', 'reviews', 'overview', 'jobs', 'companies', 'interview',
+  'interviews', 'locations', 'offices', 'people', 'working', 'benefits',
+  'photos', 'about', 'designations', 'questions', 'ratings', 'compare',
+  'search', 'profile', 'profiles', 'fresher', 'experienced', 'organisation',
+  'organisations', 'discussions', 'question', 'candidates',
+]);
+
+// Hyphenated terms that are structural page-type or filter words (not entity values).
+const STRUCTURAL_HYPHENATED = new Set([
+  'interview-questions',
+  'fresher-candidates',
+  'experienced-candidates',
+]);
+
+// Specific page slugs that should never be wildcarded (known static tool/feature pages).
+const STATIC_PAGES = new Set([
+  'take-home-salary-calculator',
+]);
+
+// Classify one URL path segment (not the root section segment) into a pattern token.
+function classifySegment(seg) {
+  // Strip trailing numeric IDs like "-294737" or "-101025502502"
+  const stripped = seg.replace(/-\d+$/, '');
+
+  // 1. Known entity-type suffix → preserve the type suffix, wildcard the entity prefix
+  //    e.g. "hdfc-bank-interview-questions" → "*-interview-questions"
+  for (const suffix of ENTITY_TYPE_SUFFIXES) {
+    if (stripped.endsWith(suffix) && stripped.length > suffix.length) {
+      return '*' + suffix;
+    }
+  }
+
+  // 2. Known hyphenated structural terms → keep verbatim
+  if (STRUCTURAL_HYPHENATED.has(stripped)) return stripped;
+
+  // 3. Known static tool/feature pages → keep verbatim
+  if (STATIC_PAGES.has(stripped)) return stripped;
+
+  // 4. Known single-word structural terms → keep verbatim
+  if (STRUCTURAL_WORDS.has(stripped)) return stripped;
+
+  // 5. Everything else → wildcard.
+  //    Covers: plain role/entity words ("teacher", "analyst", "tcs"),
+  //    hyphenated slugs without a known type suffix ("blackrock-vs-goldman-sachs"),
+  //    and any other variable entity values.
+  return '*';
+}
+
 // Derive a stable URL pattern from an example URL.
-// The pattern is used to track the same "group" across days even when GSC
-// picks a different example URL (e.g. /reviews/sbp-consulting → /reviews/xyz).
-// Rules:
-//   - Leaf segment (last) → always replaced with *
-//   - Intermediate segment → replaced with * if it contains hyphens or digits (slug-like)
-//   - Short, plain-word intermediate segments (reviews, jobs, companies...) kept as-is
+//
+// Path: the FIRST segment (section root) is always kept verbatim.
+//       Every subsequent segment is classified by classifySegment().
+//
+// Query string: param KEYS are kept, values are wildcarded (→ "key=*").
+//               Keys are sorted alphabetically for a stable pattern regardless
+//               of the order GSC returns them in.
+//               e.g. ?page=6&tag=appraisal → ?page=*&tag=*
+//
 // Examples:
-//   /reviews/sbp-consulting-reviews   → /reviews/*
-//   /overview/tcs                     → /overview/*
-//   /companies/tcs/reviews            → /companies/tcs/*
-//   /salaries/infosys-salary          → /salaries/*
+//   /salaries/physicswallah-salaries/teacher       → /salaries/*-salaries/*
+//   /salaries/pine-labs-salaries/software-developer → /salaries/*-salaries/*   ← same group
+//   /salaries/take-home-salary-calculator          → /salaries/take-home-salary-calculator
+//   /reviews/sbp-consulting-reviews                → /reviews/*-reviews
+//   /reviews/cipla-appraisal-reviews-294737?page=6 → /reviews/*-reviews?page=*
+//   /reviews/genpact-reviews?rid=123&page=2&tag=x  → /reviews/*-reviews?page=*&rid=*&tag=*
+//   /overview/tcs-overview/locations/bengaluru-offices → /overview/*-overview/locations/*-offices
+//   /overview/pwc-overview/locations/bengaluru-offices → /overview/*-overview/locations/*-offices ← same
+//   /profile/fresher-salary/bengaluru-location     → /profile/*-salary/*-location
+//   /profile/general-manager-salary/bangalore-location?IndustryName=banking&page=2
+//                                                  → /profile/*-salary/*-location?IndustryName=*&page=*
+//   /interviews/hdfc-bank-interview-questions      → /interviews/*-interview-questions
+//   /interviews/new-relic-interview-questions/fresher-candidates
+//                                                  → /interviews/*-interview-questions/fresher-candidates
+//   /salaries/deloitte-salaries/analyst/bengaluru-location → /salaries/*-salaries/*/*-location
+//   /companies-in-bengaluru                        → /companies-in-bengaluru
+//   /search?q=something                            → /search?q=*
 function derivePattern(exampleUrl) {
   if (!exampleUrl) return null;
   try {
-    const { pathname } = new URL(exampleUrl);
-    const segs = pathname.split('/').filter(Boolean);
-    if (segs.length === 0) return '/';
-    return '/' + segs.map((seg, i) => {
-      if (i === segs.length - 1) return '*'; // leaf is always the entity
-      return (seg.includes('-') || /\d/.test(seg)) ? '*' : seg;
-    }).join('/');
+    const url = new URL(exampleUrl);
+    const segs = url.pathname.split('/').filter(Boolean);
+
+    // Build path pattern
+    const pathPattern = segs.length === 0
+      ? '/'
+      : '/' + segs.map((seg, i) => i === 0 ? seg : classifySegment(seg)).join('/');
+
+    // Build query pattern: keep keys, wildcard values, sort keys for stability
+    const queryPattern = url.searchParams.size > 0
+      ? '?' + [...url.searchParams.keys()].sort().map(k => `${k}=*`).join('&')
+      : '';
+
+    return pathPattern + queryPattern;
   } catch {
     return null;
   }
@@ -143,17 +252,30 @@ async function runNightlyScrape(siteUrl) {
 }
 
 // ── Backfill url_pattern for rows inserted before the column was added ────────
+// Re-derives url_pattern for ALL existing rows using the current derivePattern logic.
+// Must be re-run (by incrementing PATTERN_VERSION) whenever derivePattern changes.
+const PATTERN_VERSION = 3;
+
 async function backfillUrlPatterns() {
   try {
     const [rows] = await pool.execute(
-      `SELECT id, example_url FROM cwv_url_groups WHERE url_pattern IS NULL OR url_pattern = '' LIMIT 50000`
+      `SELECT id, example_url FROM cwv_url_groups
+       WHERE pattern_version IS NULL OR pattern_version < ?
+       LIMIT 50000`,
+      [PATTERN_VERSION]
     );
-    if (!rows.length) return;
-    console.log(`[cwv-db] Backfilling url_pattern for ${rows.length} rows...`);
+    if (!rows.length) {
+      console.log('[cwv-db] url_pattern backfill: all rows up to date');
+      return;
+    }
+    console.log(`[cwv-db] Re-deriving url_pattern for ${rows.length} rows (v${PATTERN_VERSION})...`);
     for (const row of rows) {
       const pattern = derivePattern(row.example_url);
       if (pattern) {
-        await pool.execute(`UPDATE cwv_url_groups SET url_pattern = ? WHERE id = ?`, [pattern, row.id]);
+        await pool.execute(
+          `UPDATE cwv_url_groups SET url_pattern = ?, pattern_version = ? WHERE id = ?`,
+          [pattern, PATTERN_VERSION, row.id]
+        );
       }
     }
     console.log('[cwv-db] url_pattern backfill complete');
@@ -278,48 +400,34 @@ router.get('/cwv-db/url-groups', async (req, res) => {
   }
 });
 
-// GET /api/cwv-db/trend?siteUrl=&urlPattern=&exampleUrl=&device=&status=
-// Returns one data point per gsc_date for a specific URL group.
-// exampleUrl narrows the query to that exact URL group so we don't aggregate
-// metrics from unrelated groups that happen to share the same broad url_pattern
-// (e.g. /salaries/* matches both the calculator page and every company salary page).
-// When a URL has multiple issue rows on the same date (LCP issue + CLS issue),
-// we still use MAX so all metrics surface even if split across issue rows.
+// GET /api/cwv-db/trend?siteUrl=&urlPattern=&device=&status=
+// Returns one data point per gsc_date for a given url_pattern+device+status.
+// Each url_pattern is precise enough (query params included) to identify exactly
+// one logical URL group. MAX() only exists to handle the edge case where one URL
+// has multiple issue-label rows on the same date (e.g. LCP-issue + CLS-issue rows).
 router.get('/cwv-db/trend', async (req, res) => {
-  const { siteUrl, urlPattern, exampleUrl, device, status } = req.query;
+  const { siteUrl, urlPattern, device, status } = req.query;
   if (!siteUrl)    return res.status(400).json({ error: 'siteUrl is required' });
   if (!urlPattern) return res.status(400).json({ error: 'urlPattern is required' });
   if (!device)     return res.status(400).json({ error: 'device is required' });
   if (!status)     return res.status(400).json({ error: 'status is required' });
   try {
-    const conditions = [
-      'site_url   = ?',
-      'url_pattern = ?',
-      'device      = ?',
-      'status      = ?',
-      'gsc_date IS NOT NULL',
-    ];
-    const params = [siteUrl, urlPattern, device, status];
-
-    // When an exact example URL is provided, restrict to that specific URL group.
-    // This prevents /salaries/* from aggregating metrics across dozens of unrelated pages.
-    if (exampleUrl) {
-      conditions.push('example_url = ?');
-      params.push(exampleUrl);
-    }
-
-    const [rows] = await pool.query(
+    const [rows] = await pool.execute(
       `SELECT
          gsc_date,
-         MAX(population)  AS population,
-         MAX(lcp)         AS lcp,
-         MAX(cls)         AS cls,
-         MAX(inp)         AS inp
+         MAX(population) AS population,
+         MAX(lcp)        AS lcp,
+         MAX(cls)        AS cls,
+         MAX(inp)        AS inp
        FROM cwv_url_groups
-       WHERE ${conditions.join(' AND ')}
+       WHERE site_url    = ?
+         AND url_pattern = ?
+         AND device      = ?
+         AND status      = ?
+         AND gsc_date IS NOT NULL
        GROUP BY gsc_date
        ORDER BY gsc_date ASC`,
-      params
+      [siteUrl, urlPattern, device, status]
     );
     res.json(rows);
   } catch (err) {

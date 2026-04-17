@@ -23,7 +23,7 @@ function parseVal(raw) {
   return isNaN(n) ? null : n;
 }
 
-export default function GSCTrendChart({ siteUrl, urlPattern, exampleUrl, device, status, onClose }) {
+export default function GSCTrendChart({ siteUrl, urlPattern, device, status, onClose }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -32,7 +32,7 @@ export default function GSCTrendChart({ siteUrl, urlPattern, exampleUrl, device,
   useEffect(() => {
     setLoading(true);
     setError('');
-    axios.get(`${API}/cwv-db/trend`, { params: { siteUrl, urlPattern, exampleUrl, device, status } })
+    axios.get(`${API}/cwv-db/trend`, { params: { siteUrl, urlPattern, device, status } })
       .then(({ data: rows }) => {
         setData(rows.map(r => ({
           date: r.gsc_date,
@@ -44,7 +44,7 @@ export default function GSCTrendChart({ siteUrl, urlPattern, exampleUrl, device,
       })
       .catch(e => setError(e.response?.data?.error || e.message))
       .finally(() => setLoading(false));
-  }, [siteUrl, urlPattern, exampleUrl, device, status]);
+  }, [siteUrl, urlPattern, device, status]);
 
   const statusColor = { good: '#1e8e3e', 'needs-improvement': '#f29900', poor: '#d93025' };
   const statusLabel = { good: 'Good', 'needs-improvement': 'Needs Improvement', poor: 'Poor' };

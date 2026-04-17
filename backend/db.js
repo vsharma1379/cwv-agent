@@ -54,6 +54,11 @@ async function initDB() {
       console.log('[db] Added idx_pattern index');
     } catch (e) { /* already exists */ }
 
+    try {
+      await conn.execute(`ALTER TABLE cwv_url_groups ADD COLUMN pattern_version TINYINT DEFAULT NULL`);
+      console.log('[db] Added pattern_version column');
+    } catch (e) { /* already exists */ }
+
     console.log('[db] cwv_url_groups table ready');
   } finally {
     conn.release();

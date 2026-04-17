@@ -502,7 +502,7 @@ function DBHistoryView({ siteUrl }) {
                         <button
                           className="btn-copy"
                           title={`Trend for ${r.url_pattern}`}
-                          onClick={() => setTrendRow({ urlPattern: r.url_pattern, exampleUrl: r.example_url, device: r.device, status: r.status })}
+                          onClick={() => setTrendRow({ urlPattern: r.url_pattern, device: r.device, status: r.status })}
                         >
                           📈
                         </button>
@@ -520,7 +520,6 @@ function DBHistoryView({ siteUrl }) {
         <GSCTrendChart
           siteUrl={siteUrl}
           urlPattern={trendRow.urlPattern}
-          exampleUrl={trendRow.exampleUrl}
           device={trendRow.device}
           status={trendRow.status}
           onClose={() => setTrendRow(null)}
