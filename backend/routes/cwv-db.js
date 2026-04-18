@@ -205,13 +205,18 @@ async function scrapeAndSave(siteUrl, device, status, scrapedAt, gscDate) {
   return groups.length;
 }
 
-// Check if we already have data for this gsc_date in the DB
+// Check if we already have data for all 6 combos for this gsc_date in the DB.
+// Checking just "any row exists" is not enough — a partial scrape (e.g. Mobile/good
+// failed with 0 groups) would pass the check and prevent a retry on the next run.
 async function alreadyScraped(siteUrl, gscDateNorm) {
   const [rows] = await pool.execute(
-    `SELECT COUNT(*) as cnt FROM cwv_url_groups WHERE site_url = ? AND gsc_date = ? LIMIT 1`,
+    `SELECT device, status FROM cwv_url_groups
+     WHERE site_url = ? AND gsc_date = ?
+     GROUP BY device, status`,
     [siteUrl, gscDateNorm]
   );
-  return rows[0].cnt > 0;
+  // Must have all 6 combos: 2 devices × 3 statuses
+  return rows.length >= DEVICES.length * STATUSES.length;
 }
 
 // Full nightly scrape for one site — skips if GSC data hasn't changed since last scrape
