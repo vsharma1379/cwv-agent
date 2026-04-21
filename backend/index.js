@@ -15,11 +15,13 @@ const authRoutes       = require('./routes/auth');
 const cwvRoutes        = require('./routes/cwv');
 const gscScraperRoutes = require('./routes/gsc-scraper');
 const cwvDbRoutes      = require('./routes/cwv-db');
+const metabaseRoutes   = require('./routes/metabase');
 
 app.use('/api/auth', authRoutes);
 app.use('/api', cwvRoutes);
 app.use('/api', gscScraperRoutes);
 app.use('/api', cwvDbRoutes);
+app.use('/api', metabaseRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

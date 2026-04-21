@@ -3,13 +3,14 @@ import axios from 'axios';
 import Dashboard from './components/Dashboard';
 import URLGroupsPage from './components/URLGroupsPage';
 import GSCScraperPage from './components/GSCScraperPage';
+import MetabaseAnalyticsPage from './components/MetabaseAnalyticsPage';
 
 const BACKEND = '/api';
 
 export default function App() {
   const [auth, setAuth] = useState(null); // { access_token, email, name, picture }
   const [error, setError] = useState('');
-  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'url-groups' | 'gsc-scraper'
+  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'url-groups' | 'gsc-scraper' | 'metabase'
   const authRef = useRef(auth);
 
   // Keep ref in sync so the interceptor always sees the latest auth without re-registering
@@ -122,10 +123,14 @@ export default function App() {
         <button className={`tab-btn ${page === 'gsc-scraper' ? 'active' : ''}`} onClick={() => setPage('gsc-scraper')}>
           GSC Scraper
         </button>
+        <button className={`tab-btn ${page === 'metabase' ? 'active' : ''}`} onClick={() => setPage('metabase')}>
+          CWV Analytics
+        </button>
       </nav>
       {page === 'dashboard' && <Dashboard auth={auth} onLogout={handleLogout} />}
       {page === 'url-groups' && <URLGroupsPage auth={auth} onLogout={handleLogout} />}
       {page === 'gsc-scraper' && <GSCScraperPage auth={auth} onLogout={handleLogout} />}
+      {page === 'metabase' && <MetabaseAnalyticsPage />}
     </>
   );
 }
