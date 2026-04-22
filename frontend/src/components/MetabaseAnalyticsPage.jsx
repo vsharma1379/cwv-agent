@@ -82,31 +82,38 @@ export default function MetabaseAnalyticsPage() {
   return (
     <div className="mb-page">
       <div className="mb-header">
-        <h2 className="mb-title">CWV Analytics</h2>
-        <p className="mb-subtitle">Query core web vitals data from the analytics database</p>
+        <div className="mb-header-inner">
+          <div className="mb-header-badge"><span className="mb-header-dot" /> Live Analytics</div>
+          <h2 className="mb-title">CWV Analytics</h2>
+          <p className="mb-subtitle">Query core web vitals data from the analytics database</p>
+        </div>
       </div>
 
       {/* Filter Form */}
       <div className="mb-form-card">
-        <div className="mb-form-grid">
-          <div className="mb-field">
-            <label className="mb-label">Click Label</label>
+        <div className="mb-form-card-title">Query Filters</div>
+        <div className="mb-filter-row">
+
+          {/* Click Label */}
+          <div className="mb-filter-group">
+            <label className="mb-label">🏷 Click Label</label>
             <div className="mb-segmented">
               {['INP', 'CLS'].map(v => (
                 <button
                   key={v}
                   className={`mb-seg-btn ${form.clickLabel === v ? 'active' : ''}`}
-                  style={form.clickLabel === v ? { background: LABEL_COLORS[v], borderColor: LABEL_COLORS[v], color: '#fff' } : {}}
+                  style={form.clickLabel === v ? { background: LABEL_COLORS[v], color: '#fff' } : {}}
                   onClick={() => set('clickLabel', v)}
-                >
-                  {v}
-                </button>
+                >{v}</button>
               ))}
             </div>
           </div>
 
-          <div className="mb-field">
-            <label className="mb-label">Entity ID</label>
+          <div className="mb-filter-divider" />
+
+          {/* Entity ID */}
+          <div className="mb-filter-group">
+            <label className="mb-label">🔑 Entity ID</label>
             <div className="mb-segmented">
               {[
                 { value: 'null',     label: 'IS NULL' },
@@ -117,83 +124,80 @@ export default function MetabaseAnalyticsPage() {
                   key={value}
                   className={`mb-seg-btn ${form.entityIdFilter === value ? 'active' : ''}`}
                   style={form.entityIdFilter === value && value === 'any'
-                    ? { background: '#34a853', borderColor: '#34a853', color: '#fff' }
-                    : {}}
+                    ? { background: '#34a853', color: '#fff' } : {}}
                   onClick={() => set('entityIdFilter', value)}
-                >
-                  {label}
-                </button>
+                >{label}</button>
               ))}
             </div>
           </div>
 
-          <div className="mb-field">
-            <label className="mb-label">Page Name</label>
-            <div className="mb-input-row">
+          <div className="mb-filter-divider" />
+
+          {/* Page Name */}
+          <div className="mb-filter-group mb-filter-group--page">
+            <label className="mb-label">📄 Page Name</label>
+            {PAGE_NAMES.includes(form.pageName) ? (
               <select
                 className="mb-select"
-                value={PAGE_NAMES.includes(form.pageName) ? form.pageName : '__custom__'}
+                value={form.pageName}
                 onChange={e => {
                   if (e.target.value !== '__custom__') set('pageName', e.target.value);
+                  else set('pageName', '');
                 }}
               >
-                {PAGE_NAMES.map(p => (
-                  <option key={p} value={p}>{p}</option>
-                ))}
+                {PAGE_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
                 <option value="__custom__">Custom…</option>
               </select>
-              {!PAGE_NAMES.includes(form.pageName) || form.pageName === '' ? null : null}
-            </div>
-            {/* Custom input shown when typed */}
-            <input
-              className="mb-input"
-              style={{ marginTop: 6 }}
-              placeholder="Or type a custom page name"
-              value={PAGE_NAMES.includes(form.pageName) ? '' : form.pageName}
-              onChange={e => set('pageName', e.target.value)}
-            />
+            ) : (
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  className="mb-input"
+                  placeholder="Type page name"
+                  value={form.pageName}
+                  onChange={e => set('pageName', e.target.value)}
+                  autoFocus
+                />
+                <button className="mb-seg-btn" style={{ background: '#f1f3f4', borderRadius: 8, padding: '6px 10px' }}
+                  onClick={() => set('pageName', PAGE_NAMES[0])}>✕</button>
+              </div>
+            )}
           </div>
 
-          <div className="mb-field">
-            <label className="mb-label">Date Range</label>
-            <div className="mb-date-row">
-              <div className="mb-date-group">
+          <div className="mb-filter-divider" />
+
+          {/* Date Range */}
+          <div className="mb-filter-group">
+            <label className="mb-label">📅 Date Range</label>
+            <div className="mb-date-inline">
+              <div className="mb-date-inline-group">
                 <span className="mb-date-label">From</span>
-                <input
-                  type="date"
-                  className="mb-input"
-                  value={form.fromDate}
-                  max={form.toDate}
-                  onChange={e => set('fromDate', e.target.value)}
-                />
+                <input type="date" className="mb-input mb-date-input"
+                  value={form.fromDate} max={form.toDate}
+                  onChange={e => set('fromDate', e.target.value)} />
               </div>
               <span className="mb-date-sep">→</span>
-              <div className="mb-date-group">
+              <div className="mb-date-inline-group">
                 <span className="mb-date-label">To</span>
-                <input
-                  type="date"
-                  className="mb-input"
-                  value={form.toDate}
-                  min={form.fromDate}
-                  max={todayStr()}
-                  onChange={e => set('toDate', e.target.value)}
-                />
+                <input type="date" className="mb-input mb-date-input"
+                  value={form.toDate} min={form.fromDate} max={todayStr()}
+                  onChange={e => set('toDate', e.target.value)} />
               </div>
             </div>
           </div>
-        </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button
-            className="mb-run-btn"
-            onClick={handleFetch}
-            disabled={loading || !form.pageName}
-          >
-            {loading ? <><span className="mb-spinner" /> Running…</> : 'Run Query'}
-          </button>
-          {isStale && (
-            <span className="mb-stale-badge">Filters changed — re-run to update</span>
-          )}
+          <div className="mb-filter-divider" />
+
+          {/* Run button */}
+          <div className="mb-filter-group mb-filter-group--btn">
+            <label className="mb-label" style={{ visibility: 'hidden' }}>Run</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button className="mb-run-btn" onClick={handleFetch} disabled={loading || !form.pageName}>
+                {loading ? <><span className="mb-spinner" /> Running…</> : <>▶ Run Query</>}
+              </button>
+              {isStale && <span className="mb-stale-badge">Filters changed</span>}
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -202,22 +206,26 @@ export default function MetabaseAnalyticsPage() {
 
       {/* Results */}
       {fetched && !loading && (
-        <>
+        <div className="mb-results">
           {/* Summary cards */}
           <div className="mb-summary-row">
             <div className="mb-stat-card">
+              <span className="mb-stat-icon">📊</span>
               <div className="mb-stat-label">Total Count</div>
               <div className="mb-stat-value">{total.toLocaleString()}</div>
             </div>
             <div className="mb-stat-card">
+              <span className="mb-stat-icon">📈</span>
               <div className="mb-stat-label">Daily Average</div>
               <div className="mb-stat-value">{avg.toLocaleString()}</div>
             </div>
             <div className="mb-stat-card">
+              <span className="mb-stat-icon">🔥</span>
               <div className="mb-stat-label">Peak Day</div>
               <div className="mb-stat-value">{max.toLocaleString()}</div>
             </div>
             <div className="mb-stat-card">
+              <span className="mb-stat-icon">🗓</span>
               <div className="mb-stat-label">Days</div>
               <div className="mb-stat-value">{data.length}</div>
             </div>
@@ -231,48 +239,52 @@ export default function MetabaseAnalyticsPage() {
             <div className="mb-chart-card">
               <div className="mb-chart-header">
                 <span className="mb-chart-title">
+                  <span className="mb-chart-title-dot" style={{ background: barColor }} />
                   {fetchedParams.clickLabel} · {fetchedParams.pageName} · entityId{' '}
                   {fetchedParams.entityIdFilter === 'null' ? 'IS NULL' : fetchedParams.entityIdFilter === 'not_null' ? 'IS NOT NULL' : '(all)'}
                 </span>
-                <span className="mb-chart-range">{fetchedParams.fromDate} → {fetchedParams.toDate}</span>
+                <span className="mb-chart-range">📅 {fetchedParams.fromDate} → {fetchedParams.toDate}</span>
               </div>
-              <ResponsiveContainer width="100%" height={320}>
-                <BarChart data={data} margin={{ top: 8, right: 24, left: 8, bottom: 32 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f3f4" />
-                  <XAxis
-                    dataKey="date"
-                    tick={{ fontSize: 11, fill: '#5f6368' }}
-                    tickLine={false}
-                    angle={data.length > 10 ? -35 : 0}
-                    textAnchor={data.length > 10 ? 'end' : 'middle'}
-                    interval={0}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: '#5f6368' }}
-                    tickLine={false}
-                    axisLine={false}
-                    tickFormatter={v => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}
-                    width={56}
-                  />
-                  <Tooltip
-                    formatter={v => [v.toLocaleString(), 'Count']}
-                    labelFormatter={d => `Date: ${d}`}
-                    contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e0e0e0' }}
-                  />
-                  <Bar dataKey="count" radius={[4, 4, 0, 0]} fill={barColor} fillOpacity={0.85} />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="mb-chart-body">
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={data} margin={{ top: 8, right: 24, left: 8, bottom: 32 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f3f4" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 11, fill: '#5f6368' }}
+                      tickLine={false}
+                      angle={data.length > 10 ? -35 : 0}
+                      textAnchor={data.length > 10 ? 'end' : 'middle'}
+                      interval={0}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11, fill: '#5f6368' }}
+                      tickLine={false}
+                      axisLine={false}
+                      tickFormatter={v => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}
+                      width={56}
+                    />
+                    <Tooltip
+                      formatter={v => [v.toLocaleString(), 'Count']}
+                      labelFormatter={d => `Date: ${d}`}
+                      contentStyle={{ fontSize: 12, borderRadius: 10, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.12)' }}
+                      cursor={{ fill: 'rgba(66,133,244,0.06)' }}
+                    />
+                    <Bar dataKey="count" radius={[5, 5, 0, 0]} fill={barColor} fillOpacity={0.88} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           )}
 
           {/* SQL query */}
           {lastQuery && (
             <details className="mb-query-details">
-              <summary className="mb-query-summary">View SQL Query</summary>
+              <summary className="mb-query-summary">🔍 View SQL Query</summary>
               <pre className="mb-query-pre">{lastQuery}</pre>
             </details>
           )}
-        </>
+        </div>
       )}
     </div>
   );
