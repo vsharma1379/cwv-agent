@@ -291,9 +291,9 @@ async function backfillUrlPatterns() {
 // Run once on startup (non-blocking)
 backfillUrlPatterns();
 
-// ── Cron: midnight every day ──────────────────────────────────────────────────
-// Default: "0 0 * * *" (midnight server time). Override via CRON_SCHEDULE env.
-const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 0 * * *';
+// ── Cron: 5 PM every day ─────────────────────────────────────────────────────
+// Default: "0 17 * * *" (17:00 server local time). Override via CRON_SCHEDULE env.
+const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 17 * * *';
 
 cron.schedule(CRON_SCHEDULE, async () => {
   const sites = getSites();
