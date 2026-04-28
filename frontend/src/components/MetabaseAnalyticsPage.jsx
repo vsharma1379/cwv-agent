@@ -7,15 +7,6 @@ import {
 
 const API = '/api';
 
-const PAGE_NAMES = [
-  'companyReviews',
-  'companyOverview',
-  'companyJobs',
-  'companySalaries',
-  'companyInterviews',
-  'companyBenefits',
-  'companyPhotos',
-];
 
 function todayStr() {
   return new Date().toISOString().slice(0, 10);
@@ -28,13 +19,25 @@ function daysAgoStr(n) {
 
 const LABEL_COLORS = { INP: '#ea4335', CLS: '#fbbc04' };
 
+const DEVICE_TYPE_OPTIONS = ['WAP', 'WEB'];
+const LOGIN_STATUS_OPTIONS = [
+  { value: 1, label: 'Logged In' },
+  { value: 0, label: 'Logged Out' },
+];
+
+function toggleArrayItem(arr, item) {
+  return arr.includes(item) ? arr.filter(v => v !== item) : [...arr, item];
+}
+
 export default function MetabaseAnalyticsPage() {
   const [form, setForm] = useState({
     clickLabel: 'INP',
-    entityIdFilter: 'null',
+    entityIdFilter: 'any',
     pageName: 'companyReviews',
     fromDate: daysAgoStr(100),
     toDate: todayStr(),
+    deviceTypes: [],
+    loginStatuses: [],
   });
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -76,7 +79,9 @@ export default function MetabaseAnalyticsPage() {
     form.entityIdFilter !== fetchedParams.entityIdFilter ||
     form.pageName !== fetchedParams.pageName ||
     form.fromDate !== fetchedParams.fromDate ||
-    form.toDate !== fetchedParams.toDate
+    form.toDate !== fetchedParams.toDate ||
+    JSON.stringify(form.deviceTypes) !== JSON.stringify(fetchedParams.deviceTypes) ||
+    JSON.stringify(form.loginStatuses) !== JSON.stringify(fetchedParams.loginStatuses)
   );
 
   return (
@@ -92,9 +97,8 @@ export default function MetabaseAnalyticsPage() {
       {/* Filter Form */}
       <div className="mb-form-card">
         <div className="mb-form-card-title">Query Filters</div>
+        {/* Row 1: Click Label | Entity | Device Type | Login Status */}
         <div className="mb-filter-row">
-
-          {/* Click Label */}
           <div className="mb-filter-group">
             <label className="mb-label">🏷 Click Label</label>
             <div className="mb-segmented">
@@ -111,9 +115,8 @@ export default function MetabaseAnalyticsPage() {
 
           <div className="mb-filter-divider" />
 
-          {/* Entity ID */}
           <div className="mb-filter-group">
-            <label className="mb-label">🔑 Entity ID</label>
+            <label className="mb-label">🔑 Entity</label>
             <div className="mb-segmented">
               {[
                 { value: 'null',     label: 'IS NULL' },
@@ -133,39 +136,61 @@ export default function MetabaseAnalyticsPage() {
 
           <div className="mb-filter-divider" />
 
-          {/* Page Name */}
-          <div className="mb-filter-group mb-filter-group--page">
-            <label className="mb-label">📄 Page Name</label>
-            {PAGE_NAMES.includes(form.pageName) ? (
-              <select
-                className="mb-select"
-                value={form.pageName}
-                onChange={e => {
-                  if (e.target.value !== '__custom__') set('pageName', e.target.value);
-                  else set('pageName', '');
-                }}
-              >
-                {PAGE_NAMES.map(p => <option key={p} value={p}>{p}</option>)}
-                <option value="__custom__">Custom…</option>
-              </select>
-            ) : (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input
-                  className="mb-input"
-                  placeholder="Type page name"
-                  value={form.pageName}
-                  onChange={e => set('pageName', e.target.value)}
-                  autoFocus
-                />
-                <button className="mb-seg-btn" style={{ background: '#f1f3f4', borderRadius: 8, padding: '6px 10px' }}
-                  onClick={() => set('pageName', PAGE_NAMES[0])}>✕</button>
-              </div>
-            )}
+          <div className="mb-filter-group">
+            <label className="mb-label">📱 Device Type</label>
+            <div className="mb-segmented">
+              {DEVICE_TYPE_OPTIONS.map(v => (
+                <button
+                  key={v}
+                  className={`mb-seg-btn ${form.deviceTypes.includes(v) ? 'active' : ''}`}
+                  style={form.deviceTypes.includes(v) ? { background: '#4285f4', color: '#fff' } : {}}
+                  onClick={() => set('deviceTypes', toggleArrayItem(form.deviceTypes, v))}
+                >{v}</button>
+              ))}
+              <button
+                className={`mb-seg-btn ${form.deviceTypes.length === 0 ? 'active' : ''}`}
+                style={form.deviceTypes.length === 0 ? { background: '#9e9e9e', color: '#fff' } : {}}
+                onClick={() => set('deviceTypes', [])}
+              >All</button>
+            </div>
           </div>
 
           <div className="mb-filter-divider" />
 
-          {/* Date Range */}
+          <div className="mb-filter-group">
+            <label className="mb-label">🔐 Login Status</label>
+            <div className="mb-segmented">
+              {LOGIN_STATUS_OPTIONS.map(({ value, label }) => (
+                <button
+                  key={value}
+                  className={`mb-seg-btn ${form.loginStatuses.includes(value) ? 'active' : ''}`}
+                  style={form.loginStatuses.includes(value) ? { background: '#34a853', color: '#fff' } : {}}
+                  onClick={() => set('loginStatuses', toggleArrayItem(form.loginStatuses, value))}
+                >{label}</button>
+              ))}
+              <button
+                className={`mb-seg-btn ${form.loginStatuses.length === 0 ? 'active' : ''}`}
+                style={form.loginStatuses.length === 0 ? { background: '#9e9e9e', color: '#fff' } : {}}
+                onClick={() => set('loginStatuses', [])}
+              >All</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Row 2: Page Name | Date Range | Run Query */}
+        <div className="mb-filter-row mb-filter-row--bottom">
+          <div className="mb-filter-group mb-filter-group--page">
+            <label className="mb-label">📄 Page Name</label>
+            <input
+              className="mb-input"
+              placeholder="e.g. companyReviews"
+              value={form.pageName}
+              onChange={e => set('pageName', e.target.value)}
+            />
+          </div>
+
+          <div className="mb-filter-divider" />
+
           <div className="mb-filter-group">
             <label className="mb-label">📅 Date Range</label>
             <div className="mb-date-inline">
@@ -187,7 +212,6 @@ export default function MetabaseAnalyticsPage() {
 
           <div className="mb-filter-divider" />
 
-          {/* Run button */}
           <div className="mb-filter-group mb-filter-group--btn">
             <label className="mb-label" style={{ visibility: 'hidden' }}>Run</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -197,7 +221,6 @@ export default function MetabaseAnalyticsPage() {
               {isStale && <span className="mb-stale-badge">Filters changed</span>}
             </div>
           </div>
-
         </div>
       </div>
 
@@ -240,8 +263,10 @@ export default function MetabaseAnalyticsPage() {
               <div className="mb-chart-header">
                 <span className="mb-chart-title">
                   <span className="mb-chart-title-dot" style={{ background: barColor }} />
-                  {fetchedParams.clickLabel} · {fetchedParams.pageName} · entityId{' '}
+                  {fetchedParams.clickLabel} · {fetchedParams.pageName} · Entity{' '}
                   {fetchedParams.entityIdFilter === 'null' ? 'IS NULL' : fetchedParams.entityIdFilter === 'not_null' ? 'IS NOT NULL' : '(all)'}
+                  {` · ${fetchedParams.deviceTypes?.length ? fetchedParams.deviceTypes.join('+') : 'All devices'}`}
+                  {` · ${fetchedParams.loginStatuses?.length ? fetchedParams.loginStatuses.map(s => s === 1 ? 'LoggedIn' : 'LoggedOut').join('+') : 'All users'}`}
                 </span>
                 <span className="mb-chart-range">📅 {fetchedParams.fromDate} → {fetchedParams.toDate}</span>
               </div>
@@ -279,10 +304,10 @@ export default function MetabaseAnalyticsPage() {
 
           {/* SQL query */}
           {lastQuery && (
-            <details className="mb-query-details">
-              <summary className="mb-query-summary">🔍 View SQL Query</summary>
+            <div className="mb-query-details">
+              <div className="mb-query-summary">🔍 SQL Query</div>
               <pre className="mb-query-pre">{lastQuery}</pre>
-            </details>
+            </div>
           )}
         </div>
       )}

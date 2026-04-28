@@ -952,8 +952,13 @@ tr:hover .btn-copy { opacity: 1; }
 .mb-filter-row {
   display: flex;
   align-items: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0;
+}
+.mb-filter-row--bottom {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #e8ecf0;
 }
 .mb-filter-group {
   display: flex;
