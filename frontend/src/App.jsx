@@ -4,13 +4,14 @@ import Dashboard from './components/Dashboard';
 import URLGroupsPage from './components/URLGroupsPage';
 import GSCScraperPage from './components/GSCScraperPage';
 import MetabaseAnalyticsPage from './components/MetabaseAnalyticsPage';
+import CommitAnalysisPage from './components/CommitAnalysisPage';
 
 const BACKEND = '/api';
 
 export default function App() {
   const [auth, setAuth] = useState(null); // { access_token, email, name, picture }
   const [error, setError] = useState('');
-  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'url-groups' | 'gsc-scraper' | 'metabase'
+  const [page, setPage] = useState('dashboard'); // 'dashboard' | 'url-groups' | 'gsc-scraper' | 'metabase' | 'commit-analysis'
   const authRef = useRef(auth);
 
   // Keep ref in sync so the interceptor always sees the latest auth without re-registering
@@ -126,11 +127,15 @@ export default function App() {
         <button className={`tab-btn ${page === 'metabase' ? 'active' : ''}`} onClick={() => setPage('metabase')}>
           CWV Analytics
         </button>
+        <button className={`tab-btn ${page === 'commit-analysis' ? 'active' : ''}`} onClick={() => setPage('commit-analysis')}>
+          Commit Analyser
+        </button>
       </nav>
       {page === 'dashboard' && <Dashboard auth={auth} onLogout={handleLogout} />}
       {page === 'url-groups' && <URLGroupsPage auth={auth} onLogout={handleLogout} />}
       {page === 'gsc-scraper' && <GSCScraperPage auth={auth} onLogout={handleLogout} />}
       {page === 'metabase' && <MetabaseAnalyticsPage />}
+      {page === 'commit-analysis' && <CommitAnalysisPage />}
     </>
   );
 }

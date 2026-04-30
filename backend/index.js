@@ -11,17 +11,19 @@ app.use(cors({
 }));
 app.use(express.json());
 
-const authRoutes       = require('./routes/auth');
-const cwvRoutes        = require('./routes/cwv');
-const gscScraperRoutes = require('./routes/gsc-scraper');
-const cwvDbRoutes      = require('./routes/cwv-db');
-const metabaseRoutes   = require('./routes/metabase');
+const authRoutes           = require('./routes/auth');
+const cwvRoutes            = require('./routes/cwv');
+const gscScraperRoutes     = require('./routes/gsc-scraper');
+const cwvDbRoutes          = require('./routes/cwv-db');
+const metabaseRoutes       = require('./routes/metabase');
+const commitAnalysisRoutes = require('./routes/commit-analysis');
 
 app.use('/api/auth', authRoutes);
 app.use('/api', cwvRoutes);
 app.use('/api', gscScraperRoutes);
 app.use('/api', cwvDbRoutes);
 app.use('/api', metabaseRoutes);
+app.use('/api', commitAnalysisRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
