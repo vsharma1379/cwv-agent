@@ -17,6 +17,7 @@ const gscScraperRoutes     = require('./routes/gsc-scraper');
 const cwvDbRoutes          = require('./routes/cwv-db');
 const metabaseRoutes       = require('./routes/metabase');
 const commitAnalysisRoutes = require('./routes/commit-analysis');
+const cruxRoutes           = require('./routes/crux');
 
 app.use('/api/auth', authRoutes);
 app.use('/api', cwvRoutes);
@@ -24,6 +25,7 @@ app.use('/api', gscScraperRoutes);
 app.use('/api', cwvDbRoutes);
 app.use('/api', metabaseRoutes);
 app.use('/api', commitAnalysisRoutes);
+app.use('/api', cruxRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 

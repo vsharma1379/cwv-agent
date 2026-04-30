@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import Dashboard from './components/Dashboard';
-import URLGroupsPage from './components/URLGroupsPage';
+import URLSpeedPage from './components/URLSpeedPage';
 import GSCScraperPage from './components/GSCScraperPage';
 import MetabaseAnalyticsPage from './components/MetabaseAnalyticsPage';
 import CommitAnalysisPage from './components/CommitAnalysisPage';
@@ -118,9 +117,6 @@ export default function App() {
         <button className={`tab-btn ${page === 'dashboard' ? 'active' : ''}`} onClick={() => setPage('dashboard')}>
           URL Performance
         </button>
-        <button className={`tab-btn ${page === 'url-groups' ? 'active' : ''}`} onClick={() => setPage('url-groups')}>
-          URL Groups
-        </button>
         <button className={`tab-btn ${page === 'gsc-scraper' ? 'active' : ''}`} onClick={() => setPage('gsc-scraper')}>
           GSC Scraper
         </button>
@@ -131,8 +127,7 @@ export default function App() {
           Commit Analyser
         </button>
       </nav>
-      {page === 'dashboard' && <Dashboard auth={auth} onLogout={handleLogout} />}
-      {page === 'url-groups' && <URLGroupsPage auth={auth} onLogout={handleLogout} />}
+      {page === 'dashboard' && <URLSpeedPage />}
       {page === 'gsc-scraper' && <GSCScraperPage auth={auth} onLogout={handleLogout} />}
       {page === 'metabase' && <MetabaseAnalyticsPage />}
       {page === 'commit-analysis' && <CommitAnalysisPage />}
