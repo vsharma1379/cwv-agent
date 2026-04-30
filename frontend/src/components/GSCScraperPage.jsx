@@ -264,9 +264,14 @@ export default function GSCScraperPage({ auth, onLogout }) {
 
 // ── DB History View ───────────────────────────────────────────────────────────
 
+function yesterday() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
 function DBHistoryView({ siteUrl }) {
-  const [dates, setDates] = useState([]);
-  const [selectedDate, setSelectedDate] = useState('');
+  const [selectedDate, setSelectedDate] = useState(yesterday());
   const [allRows, setAllRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -284,15 +289,7 @@ function DBHistoryView({ siteUrl }) {
 
   useEffect(() => {
     if (!siteUrl) return;
-    setDates([]);
-    setSelectedDate('');
     setAllRows([]);
-    axios.get(`${API}/cwv-db/dates`, { params: { siteUrl } })
-      .then(({ data }) => {
-        setDates(data);
-        if (data.length) setSelectedDate(data[0]);
-      })
-      .catch(e => setError(e.response?.data?.error || e.message));
   }, [siteUrl]);
 
   // Load ALL rows for the selected date (no device/status filter on API)
@@ -360,12 +357,14 @@ function DBHistoryView({ siteUrl }) {
     <div style={{ margin: '0 24px 24px' }}>
       {/* Controls */}
       <div className="controls-bar" style={{ marginBottom: 16, marginTop: 16 }}>
-        <select className="site-select" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} disabled={!dates.length}>
-          {dates.length === 0
-            ? <option>No data in DB yet</option>
-            : dates.map(d => <option key={d} value={d}>{d}</option>)
-          }
-        </select>
+        <input
+          type="date"
+          className="site-select"
+          value={selectedDate}
+          max={yesterday()}
+          onChange={e => setSelectedDate(e.target.value)}
+          style={{ cursor: 'pointer' }}
+        />
         <select className="site-select" value={deviceFilter} onChange={e => setDeviceFilter(e.target.value)}>
           <option value="all">All Devices</option>
           <option value="Mobile">Mobile</option>
