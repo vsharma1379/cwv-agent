@@ -455,44 +455,52 @@ async function clickAndCollect(page, onGroup = () => {}, metricHint = null) {
         const { url: exampleUrl, pop: population } = rowData[i];
         let lcp = null, cls = null, inp = null, rowStatus = null;
 
-        let done = false;
-        let resolveCapture;
-        const capturePromise = new Promise(r => { resolveCapture = r; });
-        const tid = setTimeout(() => {
-          if (done) return;
-          done = true;
-          page.off('response', xsbHandler);
-          resolveCapture(null);
-        }, 5000);
+        const clickAndCapture = () => new Promise(async (resolve) => {
+          let done = false;
+          const tid = setTimeout(() => {
+            if (done) return;
+            done = true;
+            page.off('response', xsbHandler);
+            resolve(null);
+          }, 8000);
 
-        const xsbHandler = async (response) => {
-          if (done || !response.url().includes('batchexecute')) return;
-          try {
-            const text = await response.text();
-            if (text.includes('XSBInd')) {
-              done = true;
-              clearTimeout(tid);
-              page.off('response', xsbHandler);
-              resolveCapture(text);
-            }
-          } catch {}
-        };
-        page.on('response', xsbHandler);
+          const xsbHandler = async (response) => {
+            if (done || !response.url().includes('batchexecute')) return;
+            try {
+              const text = await response.text();
+              if (text.includes('XSBInd')) {
+                done = true;
+                clearTimeout(tid);
+                page.off('response', xsbHandler);
+                resolve(text);
+              }
+            } catch {}
+          };
+          page.on('response', xsbHandler);
 
-        await page.evaluate((idx) => {
-          const row = document.querySelectorAll('table tbody tr')[idx];
-          if (row) row.click();
-        }, i);
+          await page.evaluate((idx) => {
+            const row = document.querySelectorAll('table tbody tr')[idx];
+            if (row) row.click();
+          }, i);
+        });
 
-        const capturedText = await capturePromise;
+        let capturedText = await clickAndCapture();
+
+        // Retry once if no XSBInd — escape the open panel and click again
+        if (!capturedText) {
+          console.warn(`[drilldown] row ${i}: no XSBInd within 8s — retrying`);
+          try { await page.keyboard.press('Escape'); } catch {}
+          await page.waitForTimeout(600);
+          capturedText = await clickAndCapture();
+          if (!capturedText) console.warn(`[drilldown] row ${i}: retry also failed — skipping`);
+        }
+
         if (capturedText) {
           ({ lcp, cls, inp, status: rowStatus } = parseXSBInd(capturedText));
-        } else {
-          console.warn(`[drilldown] row ${i}: no XSBInd within 5s`);
         }
 
         try { await page.keyboard.press('Escape'); } catch {}
-        await page.waitForTimeout(200);
+        await page.waitForTimeout(400);
 
         console.log(`[drilldown] row ${i} LCP:${lcp} CLS:${cls} INP:${inp}`);
         const group = { exampleUrl, population, lcp, cls, inp, status: rowStatus };

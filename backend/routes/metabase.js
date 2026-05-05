@@ -3,7 +3,8 @@ const axios = require('axios');
 const router = express.Router();
 
 const METABASE_URL = 'http://analytics.ambitionbox.infoedge.com/api/dataset';
-const METABASE_SESSION = process.env.METABASE_SESSION || '8fadb518-c160-4b5d-8ae3-9717dd879c08';
+const METABASE_SESSION = process.env.METABASE_SESSION || '';
+const METABASE_COOKIE  = process.env.METABASE_COOKIE  || '';
 const METABASE_DB = 4;
 
 const VALID_CLICK_LABELS = ['INP', 'CLS'];
@@ -16,8 +17,8 @@ const PAGE_NAME_RE = /^[a-zA-Z0-9_\-.]+$/;
 router.post('/metabase-query', async (req, res) => {
   const { clickLabel, entityIdFilter, pageName, fromDate, toDate, deviceTypes, loginStatuses } = req.body;
 
-  if (!clickLabel || !pageName || !fromDate || !toDate) {
-    return res.status(400).json({ error: 'Missing required parameters: clickLabel, pageName, fromDate, toDate' });
+  if (!clickLabel || !fromDate || !toDate) {
+    return res.status(400).json({ error: 'Missing required parameters: clickLabel, fromDate, toDate' });
   }
   if (!VALID_CLICK_LABELS.includes(clickLabel)) {
     return res.status(400).json({ error: `clickLabel must be one of: ${VALID_CLICK_LABELS.join(', ')}` });
@@ -25,7 +26,7 @@ router.post('/metabase-query', async (req, res) => {
   if (!DATE_RE.test(fromDate) || !DATE_RE.test(toDate)) {
     return res.status(400).json({ error: 'Dates must be in YYYY-MM-DD format' });
   }
-  if (!PAGE_NAME_RE.test(pageName)) {
+  if (pageName && !PAGE_NAME_RE.test(pageName)) {
     return res.status(400).json({ error: 'pageName contains invalid characters' });
   }
   if (deviceTypes && (!Array.isArray(deviceTypes) || deviceTypes.some(d => !VALID_DEVICE_TYPES.includes(d)))) {
@@ -53,7 +54,7 @@ router.post('/metabase-query', async (req, res) => {
     `FROM core_web_vitals_data ` +
     `WHERE clickLabel = '${clickLabel}' ` +
     `${entityClause}` +
-    `AND pageName = '${pageName}' ` +
+    (pageName ? `AND pageName = '${pageName}' ` : '') +
     `${deviceClause}` +
     `${loginClause}` +
     `AND ubaCreatedOn BETWEEN '${fromDate}' AND '${toDate}' ` +
@@ -73,7 +74,8 @@ router.post('/metabase-query', async (req, res) => {
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',
-          'X-Metabase-Session': METABASE_SESSION,
+          ...(METABASE_SESSION && { 'X-Metabase-Session': METABASE_SESSION }),
+          ...(METABASE_COOKIE  && { Cookie: METABASE_COOKIE }),
         },
         timeout: 30000,
       }

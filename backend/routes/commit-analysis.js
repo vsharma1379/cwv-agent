@@ -1706,6 +1706,133 @@ Keep response under 350 words. Be specific, not generic.`;
   }
 });
 
+// ── Codex (OpenAI CLI) per-file analysis — mirrors claude --print approach ──
+// POST /api/commit-analysis/ai-analyze-codex
+router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
+  const { commitSha, filePath, metric } = req.body;
+
+  if (!commitSha || !filePath) {
+    return res.status(400).json({ error: "commitSha and filePath are required" });
+  }
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+
+  let gitHeaders;
+  try {
+    gitHeaders = getGitLabHeaders();
+  } catch (e) {
+    send({ type: "error", text: e.message });
+    return res.end();
+  }
+
+  try {
+    send({ type: "status", text: "Fetching diff..." });
+
+    const diffs = await fetchAllPages(
+      `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/commits/${commitSha}/diff`,
+      {}, gitHeaders, 20000,
+    );
+
+    const fileDiff = diffs.find(
+      (d) => d.new_path === filePath || d.old_path === filePath,
+    );
+    if (!fileDiff) {
+      send({ type: "error", text: `${filePath} not found in this commit's diff.` });
+      return res.end();
+    }
+
+    send({ type: "status", text: "Fetching file content..." });
+
+    let fileContent = "";
+    try {
+      const { data } = await axios.get(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: commitSha }, headers: gitHeaders, timeout: 15000 },
+      );
+      fileContent = (typeof data === "string" ? data : "")
+        .split("\n").slice(0, 300).join("\n");
+    } catch {
+      fileContent = "(could not fetch)";
+    }
+
+    const metricLabel =
+      metric === "cls" ? "CLS (Cumulative Layout Shift)"
+      : metric === "inp" ? "INP (Interaction to Next Paint)"
+      : "INP and CLS";
+
+    const prompt = `You are a Core Web Vitals expert reviewing a single file in AmbitionBox's production Next.js monorepo.
+
+FILE: ${filePath}
+COMMIT: ${commitSha}
+INVESTIGATE: ${metricLabel}
+
+=== DIFF (what changed) ===
+${(fileDiff.diff || "").slice(0, 4000)}
+
+=== FULL FILE (current state, up to 300 lines) ===
+${fileContent}
+
+Analyse this file for real ${metricLabel} issues introduced or worsened by this change.
+
+For each issue found:
+1. Name the exact component/hook/function (use real names from the code above)
+2. Quote the specific problematic line(s)
+3. Explain concretely WHY it hurts ${metricLabel}
+4. Show the exact fix using real variable/function names from this file
+
+If no real ${metricLabel} issues exist here, say so in one sentence.
+Keep response under 350 words. Be specific, not generic.`;
+
+    send({ type: "status", text: "Codex is analysing..." });
+
+    // codex exec reads prompt from stdin when '-' is passed
+    const child = spawn("codex", ["exec", "-"], {
+      env: { ...process.env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", (chunk) =>
+      send({ type: "token", text: chunk.toString() }),
+    );
+    child.stderr.on("data", () => {});
+
+    // Absorb EPIPE — if codex closes stdin early, don't crash the server
+    child.stdin.on("error", () => {});
+
+    child.on("error", (e) => {
+      const msg = e.code === "ENOENT"
+        ? "codex CLI not found — run: npm install -g @openai/codex"
+        : e.message;
+      send({ type: "error", text: msg });
+      res.end();
+    });
+
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      send({ type: "error", text: "Timed out after 2 minutes." });
+      res.end();
+    }, 120000);
+
+    child.on("close", () => {
+      clearTimeout(timer);
+      send({ type: "done" });
+      res.end();
+    });
+
+    child.stdin.write(prompt);
+    child.stdin.end();
+  } catch (e) {
+    send({ type: "error", text: e.response?.data?.message || e.message });
+    res.end();
+  }
+});
+
 module.exports = router;
 
 // ── Create Fix MR ─────────────────────────────────────────────────────────────

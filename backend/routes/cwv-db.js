@@ -296,6 +296,9 @@ backfillUrlPatterns();
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || '0 17 * * *';
 
 cron.schedule(CRON_SCHEDULE, async () => {
+  // Yield the event loop first so the cron tick doesn't compete with in-flight work
+  await new Promise(resolve => setImmediate(resolve));
+
   const sites = getSites();
   if (!sites.length) {
     console.log('[cron] No GSC_SITES configured — skipping nightly scrape');
@@ -309,7 +312,7 @@ cron.schedule(CRON_SCHEDULE, async () => {
   for (const site of sites) {
     await runNightlyScrape(site).catch(err => console.error('[cron] site error:', err.message));
   }
-});
+}, { protect: true });
 
 console.log(`[cwv-db] Nightly cron scheduled: ${CRON_SCHEDULE}`);
 

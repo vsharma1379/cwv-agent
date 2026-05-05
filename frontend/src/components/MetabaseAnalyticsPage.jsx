@@ -16,6 +16,12 @@ function daysAgoStr(n) {
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
 }
+function shortDateLabel(value) {
+  if (!value) return '';
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+}
 
 const LABEL_COLORS = { INP: '#ea4335', CLS: '#fbbc04' };
 
@@ -71,7 +77,17 @@ export default function MetabaseAnalyticsPage() {
   const total = data.reduce((s, r) => s + r.count, 0);
   const avg = data.length ? Math.round(total / data.length) : 0;
   const max = data.length ? Math.max(...data.map(r => r.count)) : 0;
+  const min = data.length ? Math.min(...data.map(r => r.count)) : 0;
   const barColor = LABEL_COLORS[fetchedParams?.clickLabel] || '#4285F4';
+
+  // Tight Y-axis: pad based on the data range only, so even small differences fill the chart
+  const dataRange = max - min;
+  const yPad = dataRange > 0 ? dataRange * 0.25 : Math.max(max * 0.1, 1);
+  const yMin = Math.max(0, Math.floor(min - yPad));
+  const yMax = Math.ceil(max + yPad);
+  const yDomain = [yMin, yMax];
+  const xAxisInterval = data.length > 14 ? Math.ceil(data.length / 10) - 1 : 0;
+  const xAxisAngled = data.length > 8;
 
   // True when the form has drifted from what's currently displayed
   const isStale = fetched && fetchedParams && (
@@ -215,7 +231,7 @@ export default function MetabaseAnalyticsPage() {
           <div className="mb-filter-group mb-filter-group--btn">
             <label className="mb-label" style={{ visibility: 'hidden' }}>Run</label>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <button className="mb-run-btn" onClick={handleFetch} disabled={loading || !form.pageName}>
+              <button className="mb-run-btn" onClick={handleFetch} disabled={loading}>
                 {loading ? <><span className="mb-spinner" /> Running…</> : <>▶ Run Query</>}
               </button>
               {isStale && <span className="mb-stale-badge">Filters changed</span>}
@@ -263,7 +279,7 @@ export default function MetabaseAnalyticsPage() {
               <div className="mb-chart-header">
                 <span className="mb-chart-title">
                   <span className="mb-chart-title-dot" style={{ background: barColor }} />
-                  {fetchedParams.clickLabel} · {fetchedParams.pageName} · Entity{' '}
+                  {fetchedParams.clickLabel} · {fetchedParams.pageName || 'All Pages'} · Entity{' '}
                   {fetchedParams.entityIdFilter === 'null' ? 'IS NULL' : fetchedParams.entityIdFilter === 'not_null' ? 'IS NOT NULL' : '(all)'}
                   {` · ${fetchedParams.deviceTypes?.length ? fetchedParams.deviceTypes.join('+') : 'All devices'}`}
                   {` · ${fetchedParams.loginStatuses?.length ? fetchedParams.loginStatuses.map(s => s === 1 ? 'LoggedIn' : 'LoggedOut').join('+') : 'All users'}`}
@@ -271,18 +287,22 @@ export default function MetabaseAnalyticsPage() {
                 <span className="mb-chart-range">📅 {fetchedParams.fromDate} → {fetchedParams.toDate}</span>
               </div>
               <div className="mb-chart-body">
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={data} margin={{ top: 8, right: 24, left: 8, bottom: 32 }}>
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart data={data} margin={{ top: 8, right: 24, left: 8, bottom: xAxisAngled ? 54 : 24 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f3f4" />
                     <XAxis
                       dataKey="date"
                       tick={{ fontSize: 11, fill: '#5f6368' }}
                       tickLine={false}
-                      angle={data.length > 10 ? -35 : 0}
-                      textAnchor={data.length > 10 ? 'end' : 'middle'}
-                      interval={0}
+                      angle={xAxisAngled ? -35 : 0}
+                      textAnchor={xAxisAngled ? 'end' : 'middle'}
+                      height={xAxisAngled ? 64 : 30}
+                      interval={xAxisInterval}
+                      minTickGap={18}
+                      tickFormatter={shortDateLabel}
                     />
                     <YAxis
+                      domain={yDomain}
                       tick={{ fontSize: 11, fill: '#5f6368' }}
                       tickLine={false}
                       axisLine={false}

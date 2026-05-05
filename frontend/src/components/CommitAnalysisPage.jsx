@@ -209,16 +209,23 @@ function CreateFixMR({ filePath, metric, analysisText }) {
 }
 
 // ── Per-file AI analysis (streaming) ────────────────────────────────────────
-function FileAIAnalysis({ commitSha, filePath, metric }) {
-  const [state, setState] = useState('idle');
+const AI_PROVIDERS = {
+  claude: { endpoint: '/commit-analysis/ai-analyze',        label: 'Claude', icon: '🧠', color: '#cc785c', headerBg: '#1a1008', border: '#3d2b1f', streamColor: '#e08060', doneColor: '#d4845a' },
+  codex:  { endpoint: '/commit-analysis/ai-analyze-codex', label: 'Codex',  icon: '⚡', color: '#10a37f', headerBg: '#001a14', border: '#0d3d2e', streamColor: '#1fd4a4', doneColor: '#10a37f' },
+};
+
+// Single independent analysis panel for one provider
+function AIPanel({ providerKey, commitSha, filePath, metric }) {
+  const [state, setState] = useState('idle'); // idle | streaming | done | error
   const [status, setStatus] = useState('');
   const [text, setText] = useState('');
   const [error, setError] = useState('');
+  const cfg = AI_PROVIDERS[providerKey];
 
   const run = async () => {
     setState('streaming'); setText(''); setStatus('Starting...'); setError('');
     try {
-      const res = await fetch(`${API}/commit-analysis/ai-analyze`, {
+      const res = await fetch(`${API}${cfg.endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ commitSha, filePath, metric }),
@@ -251,64 +258,80 @@ function FileAIAnalysis({ commitSha, filePath, metric }) {
     } catch (e) { setError(e.message); setState('error'); }
   };
 
+  const reset = () => { setState('idle'); setText(''); setError(''); };
+
   if (state === 'idle') {
     return (
       <button onClick={run} style={{
-        marginTop: 10, padding: '6px 14px', background: '#1a1a2e', color: '#e6edf3',
-        border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-        display: 'inline-flex', alignItems: 'center', gap: 6,
+        padding: '6px 14px', background: cfg.headerBg, color: cfg.streamColor,
+        border: `1px solid ${cfg.border}`, borderRadius: 6, fontSize: 12, fontWeight: 600,
+        cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6,
       }}>
-        🧠 Ask AI about this file
+        {cfg.icon} Ask {cfg.label}
       </button>
     );
   }
-  if (state === 'error') {
-    return (
-      <div style={{ marginTop: 10, padding: '8px 12px', background: '#fce8e6', borderRadius: 6, fontSize: 12, color: '#c5221f', display: 'flex', gap: 10, alignItems: 'center' }}>
-        ⚠ {error}
-        <button onClick={() => setState('idle')} style={{ fontSize: 11, color: '#c5221f', background: 'none', border: '1px solid #c5221f', borderRadius: 4, padding: '1px 8px', cursor: 'pointer' }}>Retry</button>
-      </div>
-    );
-  }
+
   return (
-    <div style={{ marginTop: 10, background: '#0d1117', borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ padding: '8px 14px', background: '#161b22', display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid #30363d' }}>
-        <span>🧠</span>
-        <span style={{ fontSize: 12, fontWeight: 700, color: '#e6edf3', flex: 1 }}>AI Analysis</span>
+    <div style={{ background: '#0d1117', borderRadius: 8, overflow: 'hidden', border: `1px solid ${cfg.border}` }}>
+      <div style={{ padding: '8px 14px', background: cfg.headerBg, display: 'flex', alignItems: 'center', gap: 8, borderBottom: `1px solid ${cfg.border}` }}>
+        <span>{cfg.icon}</span>
+        <span style={{ fontSize: 12, fontWeight: 700, color: cfg.color, flex: 1 }}>{cfg.label} Analysis</span>
         {state === 'streaming' && (
-          <span style={{ fontSize: 11, color: '#58a6ff', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ display: 'inline-block', width: 8, height: 8, border: '2px solid #1f6feb', borderTop: '2px solid #58a6ff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+          <span style={{ fontSize: 11, color: cfg.streamColor, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, border: `2px solid ${cfg.border}`, borderTop: `2px solid ${cfg.streamColor}`, borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
             {status}
           </span>
         )}
-        {state === 'done' && <span style={{ fontSize: 11, color: '#3fb950' }}>✓ Done</span>}
-        <button onClick={() => setState('idle')} style={{ fontSize: 12, color: '#8b949e', background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>✕</button>
+        {state === 'done'  && <span style={{ fontSize: 11, color: cfg.doneColor }}>✓ Done</span>}
+        {state === 'error' && <span style={{ fontSize: 11, color: '#c5221f' }}>✗ Error</span>}
+        <button onClick={reset} style={{ fontSize: 12, color: '#8b949e', background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>✕</button>
       </div>
-      <div style={{ padding: '12px 16px', maxHeight: 480, overflowY: 'auto' }}>
-        {text ? text.split('\n').map((line, i) => {
-          const isH = /^#{1,3} /.test(line);
-          const isNum = /^\d+\./.test(line.trim());
-          const isBullet = /^[-*] /.test(line.trim());
-          return (
-            <p key={i} style={{
-              margin: (isH || isNum) ? '12px 0 3px' : isBullet ? '3px 0 3px 14px' : '1px 0',
-              fontSize: 12, lineHeight: 1.7,
-              fontWeight: (isH || isNum) ? 700 : 400,
-              color: isH ? '#e6edf3' : (isNum || isBullet) ? '#c9d1d9' : '#8b949e',
-              whiteSpace: 'pre-wrap',
-              fontFamily: line.includes('`') ? 'monospace' : 'inherit',
-            }}>{line || ' '}</p>
-          );
-        }) : <p style={{ color: '#484f58', fontSize: 12, fontStyle: 'italic', margin: 0 }}>Waiting for Claude...</p>}
-        {state === 'streaming' && text && (
-          <span style={{ display: 'inline-block', width: 7, height: 13, background: '#58a6ff', animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom', marginLeft: 2 }} />
-        )}
-      </div>
-      {state === 'done' && text && (
-        <div style={{ padding: '0 16px 14px', borderTop: '1px solid #21262d' }}>
-          <CreateFixMR filePath={filePath} metric={metric} analysisText={text} />
+
+      {state === 'error' ? (
+        <div style={{ padding: '10px 14px', fontSize: 12, color: '#c5221f', display: 'flex', gap: 10, alignItems: 'center' }}>
+          ⚠ {error}
+          <button onClick={run} style={{ fontSize: 11, color: '#c5221f', background: 'none', border: '1px solid #c5221f', borderRadius: 4, padding: '1px 8px', cursor: 'pointer' }}>Retry</button>
         </div>
+      ) : (
+        <>
+          <div style={{ padding: '12px 16px', maxHeight: 480, overflowY: 'auto' }}>
+            {text ? text.split('\n').map((line, i) => {
+              const isH      = /^#{1,3} /.test(line);
+              const isNum    = /^\d+\./.test(line.trim());
+              const isBullet = /^[-*] /.test(line.trim());
+              return (
+                <p key={i} style={{
+                  margin: (isH || isNum) ? '12px 0 3px' : isBullet ? '3px 0 3px 14px' : '1px 0',
+                  fontSize: 12, lineHeight: 1.7,
+                  fontWeight: (isH || isNum) ? 700 : 400,
+                  color: isH ? '#e6edf3' : (isNum || isBullet) ? '#c9d1d9' : '#8b949e',
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: line.includes('`') ? 'monospace' : 'inherit',
+                }}>{line || ' '}</p>
+              );
+            }) : <p style={{ color: '#484f58', fontSize: 12, fontStyle: 'italic', margin: 0 }}>Waiting for {cfg.label}...</p>}
+            {state === 'streaming' && text && (
+              <span style={{ display: 'inline-block', width: 7, height: 13, background: cfg.streamColor, animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom', marginLeft: 2 }} />
+            )}
+          </div>
+          {state === 'done' && text && (
+            <div style={{ padding: '0 16px 14px', borderTop: `1px solid ${cfg.border}` }}>
+              <CreateFixMR filePath={filePath} metric={metric} analysisText={text} />
+            </div>
+          )}
+        </>
       )}
+    </div>
+  );
+}
+
+// Container: shows both provider buttons, expands panels independently so both can be compared
+function FileAIAnalysis({ commitSha, filePath, metric }) {
+  return (
+    <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <AIPanel providerKey="claude" commitSha={commitSha} filePath={filePath} metric={metric} />
+      <AIPanel providerKey="codex"  commitSha={commitSha} filePath={filePath} metric={metric} />
     </div>
   );
 }
