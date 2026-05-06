@@ -135,7 +135,7 @@ export default function MetabaseAnalyticsPage() {
             <label className="mb-label">🔑 Entity</label>
             <div className="mb-segmented">
               {[
-                { value: 'null',     label: 'IS NULL' },
+                { value: 'null',     label: 'NULL / Empty' },
                 { value: 'not_null', label: 'IS NOT NULL' },
                 { value: 'any',      label: 'No Filter' },
               ].map(({ value, label }) => (
@@ -280,7 +280,7 @@ export default function MetabaseAnalyticsPage() {
                 <span className="mb-chart-title">
                   <span className="mb-chart-title-dot" style={{ background: barColor }} />
                   {fetchedParams.clickLabel} · {fetchedParams.pageName || 'All Pages'} · Entity{' '}
-                  {fetchedParams.entityIdFilter === 'null' ? 'IS NULL' : fetchedParams.entityIdFilter === 'not_null' ? 'IS NOT NULL' : '(all)'}
+                  {fetchedParams.entityIdFilter === 'null' ? 'NULL / Empty' : fetchedParams.entityIdFilter === 'not_null' ? 'IS NOT NULL' : '(all)'}
                   {` · ${fetchedParams.deviceTypes?.length ? fetchedParams.deviceTypes.join('+') : 'All devices'}`}
                   {` · ${fetchedParams.loginStatuses?.length ? fetchedParams.loginStatuses.map(s => s === 1 ? 'LoggedIn' : 'LoggedOut').join('+') : 'All users'}`}
                 </span>

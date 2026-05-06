@@ -5,6 +5,69 @@ const router = express.Router();
 const GITLAB_BASE = "https://gitlab.infoedge.com/api/v4";
 const PROJECT_PATH = "ambitionbox%2Fmonorepo-web-native";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CODEX_DIFF_CHAR_LIMIT = 12000;
+const CODEX_CONTEXT_RADIUS = 80;
+const CODEX_FALLBACK_CONTEXT_LINES = 300;
+
+function parseChangedNewLineRanges(diffText) {
+  const ranges = [];
+  const hunkRe = /^@@\s+-\d+(?:,\d+)?\s+\+(\d+)(?:,(\d+))?\s+@@/gm;
+  let match;
+
+  while ((match = hunkRe.exec(diffText || "")) !== null) {
+    const start = Number(match[1]);
+    const count = match[2] === undefined ? 1 : Number(match[2]);
+    if (!Number.isFinite(start) || !Number.isFinite(count)) continue;
+
+    ranges.push({
+      start,
+      end: count === 0 ? start : start + count - 1,
+    });
+  }
+
+  return ranges;
+}
+
+function buildCodexFileContext(fileText, diffText, radius = CODEX_CONTEXT_RADIUS) {
+  if (typeof fileText !== "string" || !fileText) return "(could not fetch)";
+
+  const lines = fileText.split("\n");
+  const changedRanges = parseChangedNewLineRanges(diffText);
+
+  if (!changedRanges.length) {
+    return lines
+      .slice(0, CODEX_FALLBACK_CONTEXT_LINES)
+      .map((line, i) => `${i + 1}: ${line}`)
+      .join("\n");
+  }
+
+  const mergedRanges = changedRanges
+    .map(({ start, end }) => ({
+      start: Math.max(1, start - radius),
+      end: Math.min(lines.length, end + radius),
+    }))
+    .sort((a, b) => a.start - b.start)
+    .reduce((acc, range) => {
+      const prev = acc[acc.length - 1];
+      if (prev && range.start <= prev.end + 1) {
+        prev.end = Math.max(prev.end, range.end);
+      } else {
+        acc.push({ ...range });
+      }
+      return acc;
+    }, []);
+
+  return mergedRanges
+    .map(({ start, end }) => {
+      const body = lines
+        .slice(start - 1, end)
+        .map((line, i) => `${start + i}: ${line}`)
+        .join("\n");
+
+      return `--- lines ${start}-${end} ---\n${body}`;
+    })
+    .join("\n\n");
+}
 
 const CLS_PATTERNS = [
   {
@@ -1749,16 +1812,15 @@ router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
 
     send({ type: "status", text: "Fetching file content..." });
 
-    let fileContent = "";
+    let fileContext = "";
     try {
       const { data } = await axios.get(
         `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/files/${encodeURIComponent(filePath)}/raw`,
         { params: { ref: commitSha }, headers: gitHeaders, timeout: 15000 },
       );
-      fileContent = (typeof data === "string" ? data : "")
-        .split("\n").slice(0, 300).join("\n");
+      fileContext = buildCodexFileContext(data, fileDiff.diff);
     } catch {
-      fileContent = "(could not fetch)";
+      fileContext = "(could not fetch)";
     }
 
     const metricLabel =
@@ -1773,10 +1835,10 @@ COMMIT: ${commitSha}
 INVESTIGATE: ${metricLabel}
 
 === DIFF (what changed) ===
-${(fileDiff.diff || "").slice(0, 4000)}
+${(fileDiff.diff || "").slice(0, CODEX_DIFF_CHAR_LIMIT)}
 
-=== FULL FILE (current state, up to 300 lines) ===
-${fileContent}
+=== RELEVANT FILE CONTEXT (current state, 80 lines around each changed area) ===
+${fileContext}
 
 Analyse this file for real ${metricLabel} issues introduced or worsened by this change.
 

@@ -38,7 +38,7 @@ router.post('/metabase-query', async (req, res) => {
 
   const entityClause =
     entityIdFilter === 'not_null' ? 'AND entity IS NOT NULL ' :
-    entityIdFilter === 'null'     ? 'AND entity IS NULL ' :
+    entityIdFilter === 'null'     ? "AND (entity IS NULL OR entity = '') " :
     '';  // 'any' — no entity filter
 
   const deviceClause = deviceTypes?.length
