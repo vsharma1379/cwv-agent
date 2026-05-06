@@ -40,10 +40,10 @@ export default function MetabaseAnalyticsPage() {
     clickLabel: 'INP',
     entityIdFilter: 'any',
     pageName: 'companyReviews',
-    fromDate: daysAgoStr(100),
+    fromDate: daysAgoStr(250),
     toDate: todayStr(),
     deviceTypes: [],
-    loginStatuses: [],
+    loginStatus: 'any',
   });
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -97,7 +97,7 @@ export default function MetabaseAnalyticsPage() {
     form.fromDate !== fetchedParams.fromDate ||
     form.toDate !== fetchedParams.toDate ||
     JSON.stringify(form.deviceTypes) !== JSON.stringify(fetchedParams.deviceTypes) ||
-    JSON.stringify(form.loginStatuses) !== JSON.stringify(fetchedParams.loginStatuses)
+    form.loginStatus !== fetchedParams.loginStatus
   );
 
   return (
@@ -107,6 +107,34 @@ export default function MetabaseAnalyticsPage() {
           <div className="mb-header-badge"><span className="mb-header-dot" /> Live Analytics</div>
           <h2 className="mb-title">CWV Analytics</h2>
           <p className="mb-subtitle">Query core web vitals data from the analytics database</p>
+        </div>
+      </div>
+
+      {/* RUM banner */}
+      <div style={{
+        margin: '0 24px 20px',
+        padding: '16px 22px',
+        borderRadius: 12,
+        background: 'linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 18,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.18)',
+      }}>
+        <div style={{ fontSize: 32, flexShrink: 0 }}>📡</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#ffffff', marginBottom: 4, letterSpacing: 0.2 }}>
+            Real User Monitoring — straight from your users' browsers
+          </div>
+          <div style={{ fontSize: 12, color: '#a8c8d8', lineHeight: 1.7 }}>
+            Every data point here is a genuine interaction measured by the <strong style={{ color: '#7dd3fc' }}>Core Web Vitals SDK plugin</strong> running live on AmbitionBox.
+            No synthetic tests, no lab simulations — this is exactly what your users experience on their devices and networks, captured the moment it happens.
+            Use it to catch regressions early, validate fixes, and build pages that feel fast for everyone.
+          </div>
+        </div>
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+          <div style={{ fontSize: 11, color: '#7dd3fc', fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase' }}>Field Data</div>
+          <div style={{ fontSize: 11, color: '#a8c8d8' }}>P75 · Real Devices · All Networks</div>
         </div>
       </div>
 
@@ -135,8 +163,8 @@ export default function MetabaseAnalyticsPage() {
             <label className="mb-label">🔑 Entity</label>
             <div className="mb-segmented">
               {[
-                { value: 'null',     label: 'NULL / Empty' },
-                { value: 'not_null', label: 'IS NOT NULL' },
+                { value: 'null',     label: 'BLANK' },
+                { value: 'not_null', label: 'Not BLANK' },
                 { value: 'any',      label: 'No Filter' },
               ].map(({ value, label }) => (
                 <button
@@ -176,19 +204,18 @@ export default function MetabaseAnalyticsPage() {
           <div className="mb-filter-group">
             <label className="mb-label">🔐 Login Status</label>
             <div className="mb-segmented">
-              {LOGIN_STATUS_OPTIONS.map(({ value, label }) => (
+              {[
+                { value: 'any', label: 'All' },
+                { value: '1',   label: 'Logged In' },
+                { value: '0',   label: 'Logged Out' },
+              ].map(({ value, label }) => (
                 <button
                   key={value}
-                  className={`mb-seg-btn ${form.loginStatuses.includes(value) ? 'active' : ''}`}
-                  style={form.loginStatuses.includes(value) ? { background: '#34a853', color: '#fff' } : {}}
-                  onClick={() => set('loginStatuses', toggleArrayItem(form.loginStatuses, value))}
+                  className={`mb-seg-btn ${form.loginStatus === value ? 'active' : ''}`}
+                  style={form.loginStatus === value ? { background: value === 'any' ? '#9e9e9e' : '#34a853', color: '#fff' } : {}}
+                  onClick={() => set('loginStatus', value)}
                 >{label}</button>
               ))}
-              <button
-                className={`mb-seg-btn ${form.loginStatuses.length === 0 ? 'active' : ''}`}
-                style={form.loginStatuses.length === 0 ? { background: '#9e9e9e', color: '#fff' } : {}}
-                onClick={() => set('loginStatuses', [])}
-              >All</button>
             </div>
           </div>
         </div>

@@ -1359,6 +1359,20 @@ function analyzeDiff(rawDiff, metric) {
   return Object.values(byPattern);
 }
 
+// Like analyzeDiff but scans plain file content (not a unified diff).
+// Returns the set of pattern IDs that still match at least one line.
+function checkFileForPatterns(fileContent, metric) {
+  const lines = (fileContent || '').split('\n');
+  const patterns = getPatterns(metric);
+  const matched = new Set();
+  for (const line of lines) {
+    for (const pat of patterns) {
+      if (pat.matches(line)) matched.add(pat.id);
+    }
+  }
+  return matched;
+}
+
 function riskScore(findings) {
   const w = { high: 3, medium: 2, low: 1 };
   return findings.reduce(
@@ -1590,6 +1604,44 @@ router.post("/commit-analysis", async (req, res) => {
   }
 });
 
+// ── Check current master state of a file ─────────────────────────────────────
+// GET /api/commit-analysis/check-master?filePath=&metric=
+// Fetches the file from master, re-runs pattern checks, returns which of the
+// originally-flagged patterns are still present vs fixed.
+router.get("/commit-analysis/check-master", async (req, res) => {
+  const { filePath, metric } = req.query;
+  if (!filePath) return res.status(400).json({ error: "filePath is required" });
+
+  let headers;
+  try { headers = getGitLabHeaders(); } catch (e) {
+    return res.status(503).json({ error: e.message });
+  }
+
+  try {
+    let fileContent = null;
+    let fileExists = true;
+    try {
+      const { data } = await axios.get(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/files/${encodeURIComponent(filePath)}/raw`,
+        { params: { ref: "master" }, headers, timeout: 15000 },
+      );
+      fileContent = typeof data === "string" ? data : JSON.stringify(data);
+    } catch (e) {
+      if (e.response?.status === 404) fileExists = false;
+      else throw e;
+    }
+
+    if (!fileExists) {
+      return res.json({ fileExists: false, patternsStillPresent: [], checkedAt: new Date().toISOString() });
+    }
+
+    const stillPresent = [...checkFileForPatterns(fileContent, metric || "both")];
+    res.json({ fileExists: true, patternsStillPresent: stillPresent, checkedAt: new Date().toISOString() });
+  } catch (e) {
+    res.status(500).json({ error: e.response?.data?.message || e.message });
+  }
+});
+
 // ── AI deep-file analysis via Claude Code CLI ────────────────────────────────
 // POST /api/commit-analysis/ai-analyze
 // Spawns the local `claude --print` CLI (already authenticated via Claude Code)
@@ -1694,10 +1746,8 @@ router.post("/commit-analysis/ai-analyze", async (req, res) => {
         )}/raw`,
         { params: { ref: commitSha }, headers: gitHeaders, timeout: 15000 },
       );
-      fileContent = (typeof data === "string" ? data : "")
-        .split("\n")
-        .slice(0, 300)
-        .join("\n");
+      const rawText = typeof data === "string" ? data : "";
+      fileContent = buildCodexFileContext(rawText, fileDiff.diff || "");
     } catch {
       fileContent = "(could not fetch)";
     }
@@ -1716,21 +1766,26 @@ COMMIT: ${commitSha}
 INVESTIGATE: ${metricLabel}
 
 === DIFF (what changed) ===
-${(fileDiff.diff || "").slice(0, 4000)}
+${fileDiff.diff || ""}
 
-=== FULL FILE (current state, up to 300 lines) ===
+=== FILE CONTEXT (lines around each changed section, ±80 lines) ===
 ${fileContent}
 
 Analyse this file for real ${metricLabel} issues introduced or worsened by this change.
 
-For each issue found:
-1. Name the exact component/hook/function (use real names from the code above)
-2. Quote the specific problematic line(s)
-3. Explain concretely WHY it hurts ${metricLabel}
-4. Show the exact fix using real variable/function names from this file
+For each issue found, use this exact format:
+
+**Issue N: <short title>**
+- **Component:** exact component/hook/function name from the code
+- **Problem line:** \`quote the exact problematic line\`
+- **Why it hurts ${metricLabel}:** one clear sentence
+- **Fix:**
+\`\`\`jsx
+// corrected code using real variable/function names from the file
+\`\`\`
 
 If no real ${metricLabel} issues exist here, say so in one sentence.
-Keep response under 350 words. Be specific, not generic.`;
+Keep response under 400 words. Be specific, not generic.`;
 
     send({ type: "status", text: "Claude is analysing..." });
 
@@ -1835,21 +1890,26 @@ COMMIT: ${commitSha}
 INVESTIGATE: ${metricLabel}
 
 === DIFF (what changed) ===
-${(fileDiff.diff || "").slice(0, CODEX_DIFF_CHAR_LIMIT)}
+${fileDiff.diff || ""}
 
-=== RELEVANT FILE CONTEXT (current state, 80 lines around each changed area) ===
+=== FILE CONTEXT (lines around each changed section, ±80 lines) ===
 ${fileContext}
 
 Analyse this file for real ${metricLabel} issues introduced or worsened by this change.
 
-For each issue found:
-1. Name the exact component/hook/function (use real names from the code above)
-2. Quote the specific problematic line(s)
-3. Explain concretely WHY it hurts ${metricLabel}
-4. Show the exact fix using real variable/function names from this file
+For each issue found, use this exact format:
+
+**Issue N: <short title>**
+- **Component:** exact component/hook/function name from the code
+- **Problem line:** \`quote the exact problematic line\`
+- **Why it hurts ${metricLabel}:** one clear sentence
+- **Fix:**
+\`\`\`jsx
+// corrected code using real variable/function names from the file
+\`\`\`
 
 If no real ${metricLabel} issues exist here, say so in one sentence.
-Keep response under 350 words. Be specific, not generic.`;
+Keep response under 400 words. Be specific, not generic.`;
 
     send({ type: "status", text: "Codex is analysing..." });
 
@@ -1859,9 +1919,13 @@ Keep response under 350 words. Be specific, not generic.`;
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    child.stdout.on("data", (chunk) =>
-      send({ type: "token", text: chunk.toString() }),
-    );
+    // Strip ANSI escape codes that Codex CLI injects into stdout
+    const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+
+    child.stdout.on("data", (chunk) => {
+      const clean = stripAnsi(chunk.toString());
+      if (clean) send({ type: "token", text: clean });
+    });
     child.stderr.on("data", () => {});
 
     // Absorb EPIPE — if codex closes stdin early, don't crash the server

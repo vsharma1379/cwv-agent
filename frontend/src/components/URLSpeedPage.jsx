@@ -63,7 +63,38 @@ export default function URLSpeedPage() {
 
   return (
     <div style={{ maxWidth: 900, margin: '32px auto', padding: '0 24px' }}>
-      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 20, color: '#202124' }}>URL Page Speed (CrUX)</h2>
+      <h2 style={{ fontSize: 20, fontWeight: 600, marginBottom: 16, color: '#202124' }}>URL Page Speed (CrUX)</h2>
+
+      {/* CrUX info banner */}
+      <div style={{
+        marginBottom: 24,
+        padding: '16px 20px',
+        borderRadius: 12,
+        background: 'linear-gradient(135deg, #1a1035 0%, #2d1b69 50%, #1e3a5f 100%)',
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 16,
+        boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+      }}>
+        <div style={{ fontSize: 28, flexShrink: 0, marginTop: 2 }}>🔭</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#ffffff', marginBottom: 5, letterSpacing: 0.2 }}>
+            Chrome UX Report (CrUX) — the same data behind PageSpeed Insights
+          </div>
+          <div style={{ fontSize: 12, color: '#b8aee8', lineHeight: 1.75 }}>
+            This data is collected by Chrome from real users who have opted in to sharing browsing statistics.
+            Google aggregates it into <strong style={{ color: '#c4b5fd' }}>weekly P75 snapshots</strong> — so changes you ship today
+            won't appear here for <strong style={{ color: '#fbbf24' }}>up to 7 days</strong>, and the rolling 28-day window means
+            the full impact of a fix can take <strong style={{ color: '#fbbf24' }}>3–4 weeks</strong> to fully reflect.
+          </div>
+          <div style={{ marginTop: 10, fontSize: 11, color: '#a78bfa', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <span>📅 Updates weekly</span>
+            <span>⏳ 7–28 day lag from deploy to data</span>
+            <span>✅ Pinpoints exact week a trend changed</span>
+            <span>🌐 Real Chrome users · All networks · All devices</span>
+          </div>
+        </div>
+      </div>
 
       {/* Input row */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>

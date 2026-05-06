@@ -208,6 +208,54 @@ function CreateFixMR({ filePath, metric, analysisText }) {
   );
 }
 
+// ── Markdown renderer for AI output ─────────────────────────────────────────
+function renderInline(text) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**'))
+      return <strong key={i} style={{ color: '#e6edf3', fontWeight: 700 }}>{part.slice(2, -2)}</strong>;
+    if (part.startsWith('`') && part.endsWith('`'))
+      return <code key={i} style={{ fontFamily: 'monospace', background: 'rgba(255,255,255,0.1)', padding: '1px 5px', borderRadius: 3, fontSize: 11, color: '#a5d6ff' }}>{part.slice(1, -1)}</code>;
+    return part;
+  });
+}
+
+function renderMarkdown(text) {
+  const lines = text.split('\n');
+  const elements = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line.trim().startsWith('```')) {
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) { codeLines.push(lines[i]); i++; }
+      elements.push(
+        <pre key={`code-${i}`} style={{ margin: '8px 0', padding: '10px 14px', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, fontSize: 11, fontFamily: 'monospace', color: '#a5d6ff', whiteSpace: 'pre-wrap', wordBreak: 'break-all', lineHeight: 1.6, overflowX: 'auto' }}>
+          {codeLines.join('\n')}
+        </pre>
+      );
+      i++; continue;
+    }
+    const isH      = /^#{1,3} /.test(line);
+    const isNum    = /^\d+\./.test(line.trim());
+    const isBullet = /^[-*] /.test(line.trim());
+    const rawText  = isH ? line.replace(/^#{1,3} /, '') : isBullet ? line.trim().slice(2) : line;
+    elements.push(
+      <p key={i} style={{
+        margin: isH ? '14px 0 4px' : isNum ? '10px 0 3px' : isBullet ? '2px 0 2px 16px' : '1px 0',
+        fontSize: isH ? 13 : 12, lineHeight: 1.75,
+        fontWeight: (isH || isNum) ? 700 : 400,
+        color: isH ? '#e6edf3' : (isNum || isBullet) ? '#c9d1d9' : '#8b949e',
+      }}>
+        {renderInline(rawText)}
+      </p>
+    );
+    i++;
+  }
+  return elements;
+}
+
 // ── Per-file AI analysis (streaming) ────────────────────────────────────────
 const AI_PROVIDERS = {
   claude: { endpoint: '/commit-analysis/ai-analyze',        label: 'Claude', icon: '🧠', color: '#cc785c', headerBg: '#1a1008', border: '#3d2b1f', streamColor: '#e08060', doneColor: '#d4845a' },
@@ -296,21 +344,7 @@ function AIPanel({ providerKey, commitSha, filePath, metric }) {
       ) : (
         <>
           <div style={{ padding: '12px 16px', maxHeight: 480, overflowY: 'auto' }}>
-            {text ? text.split('\n').map((line, i) => {
-              const isH      = /^#{1,3} /.test(line);
-              const isNum    = /^\d+\./.test(line.trim());
-              const isBullet = /^[-*] /.test(line.trim());
-              return (
-                <p key={i} style={{
-                  margin: (isH || isNum) ? '12px 0 3px' : isBullet ? '3px 0 3px 14px' : '1px 0',
-                  fontSize: 12, lineHeight: 1.7,
-                  fontWeight: (isH || isNum) ? 700 : 400,
-                  color: isH ? '#e6edf3' : (isNum || isBullet) ? '#c9d1d9' : '#8b949e',
-                  whiteSpace: 'pre-wrap',
-                  fontFamily: line.includes('`') ? 'monospace' : 'inherit',
-                }}>{line || ' '}</p>
-              );
-            }) : <p style={{ color: '#484f58', fontSize: 12, fontStyle: 'italic', margin: 0 }}>Waiting for {cfg.label}...</p>}
+            {text ? renderMarkdown(text) : <p style={{ color: '#484f58', fontSize: 12, fontStyle: 'italic', margin: 0 }}>Waiting for {cfg.label}...</p>}
             {state === 'streaming' && text && (
               <span style={{ display: 'inline-block', width: 7, height: 13, background: cfg.streamColor, animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom', marginLeft: 2 }} />
             )}
@@ -339,8 +373,62 @@ function FileAIAnalysis({ commitSha, filePath, metric }) {
 // ── File row inside a commit ─────────────────────────────────────────────────
 function FileRow({ cf, fr, commitId, metric }) {
   const [open, setOpen] = useState(false);
+  const [masterState, setMasterState] = useState('idle'); // idle | loading | done | error
+  const [masterResult, setMasterResult] = useState(null);
   const { name, dir } = shortPath(cf.file);
   const hasFlagged = fr?.findings?.length > 0;
+
+  const checkMaster = async (e) => {
+    e.stopPropagation();
+    setMasterState('loading');
+    try {
+      const { data } = await axios.get(`${API}/commit-analysis/check-master`, {
+        params: { filePath: cf.file, metric },
+      });
+      setMasterResult(data);
+      setMasterState('done');
+    } catch {
+      setMasterState('error');
+    }
+  };
+
+  // Per-finding status from master check
+  const stillPresentIds = masterResult?.fileExists === false
+    ? new Set()
+    : new Set(masterResult?.patternsStillPresent ?? []);
+  const masterChecked = masterState === 'done';
+
+  // Summary badge for the header
+  const masterBadge = () => {
+    if (masterState === 'idle') return (
+      <button onClick={checkMaster} style={{
+        fontSize: 11, padding: '2px 9px', borderRadius: 4, border: '1px solid #dadce0',
+        background: '#fff', color: '#5f6368', cursor: 'pointer', flexShrink: 0,
+      }}>Check master ↗</button>
+    );
+    if (masterState === 'loading') return (
+      <span style={{ fontSize: 11, color: '#9e9e9e', flexShrink: 0 }}>Checking…</span>
+    );
+    if (masterState === 'error') return (
+      <span style={{ fontSize: 11, color: '#c5221f', flexShrink: 0 }}>Check failed</span>
+    );
+    if (!masterResult.fileExists) return (
+      <span style={badge('#e6f4ea', '#137333')}>✓ Deleted on master</span>
+    );
+    const flaggedIds = fr?.findings?.map(f => f.id) ?? [];
+    const still = flaggedIds.filter(id => stillPresentIds.has(id));
+    const fixed = flaggedIds.length - still.length;
+    if (still.length === 0 && flaggedIds.length > 0) return (
+      <span style={badge('#e6f4ea', '#137333')}>✓ All fixed on master</span>
+    );
+    if (still.length > 0) return (
+      <span style={badge('#fef3cd', '#b06000')}>
+        ⚠ {still.length} pending{fixed > 0 ? ` · ${fixed} fixed` : ''}
+      </span>
+    );
+    // no flagged findings but file checked
+    return <span style={badge('#e6f4ea', '#137333')}>✓ Clean on master</span>;
+  };
 
   return (
     <div style={{ borderBottom: '1px solid #f1f3f4' }}>
@@ -356,14 +444,11 @@ function FileRow({ cf, fr, commitId, metric }) {
         </span>
         <span style={{ fontSize: 11, color: '#137333', fontWeight: 700, flexShrink: 0 }}>+{cf.addedLineCount}</span>
         <span style={{ fontSize: 11, color: '#c5221f', fontWeight: 700, flexShrink: 0 }}>-{cf.removedLineCount ?? 0}</span>
-        {cf.isNew      && <span style={badge('#e6f4ea','#137333')}>new</span>}
-        {cf.isDeleted  && <span style={badge('#fce8e6','#c5221f')}>del</span>}
-        {cf.isRenamed  && <span style={badge('#fef3cd','#b06000')}>ren</span>}
-        {hasFlagged && (
-          <span style={badge('#fce8e6','#c5221f')}>
-            ⚑ {fr.findings.length}
-          </span>
-        )}
+        {cf.isNew     && <span style={badge('#e6f4ea','#137333')}>new</span>}
+        {cf.isDeleted && <span style={badge('#fce8e6','#c5221f')}>del</span>}
+        {cf.isRenamed && <span style={badge('#fef3cd','#b06000')}>ren</span>}
+        {hasFlagged && <span style={badge('#fce8e6','#c5221f')}>⚑ {fr.findings.length}</span>}
+        {masterBadge()}
         <span style={{ fontSize: 12, color: '#9e9e9e', flexShrink: 0 }}>{open ? '▲' : '▼'}</span>
       </div>
 
@@ -377,7 +462,17 @@ function FileRow({ cf, fr, commitId, metric }) {
               <div style={{ fontSize: 11, fontWeight: 700, color: '#5f6368', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
                 Flagged patterns
               </div>
-              {fr.findings.map((f, i) => <FindingRow key={i} finding={f} />)}
+              {fr.findings.map((f, i) => {
+                const isFixed   = masterChecked && masterResult?.fileExists && !stillPresentIds.has(f.id);
+                const isPending = masterChecked && masterResult?.fileExists &&  stillPresentIds.has(f.id);
+                return (
+                  <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6 }}>
+                    <div style={{ flex: 1 }}><FindingRow finding={f} /></div>
+                    {isFixed   && <span style={{ ...badge('#e6f4ea','#137333'), marginTop: 6, flexShrink: 0 }}>✓ Fixed</span>}
+                    {isPending && <span style={{ ...badge('#fce8e6','#c5221f'), marginTop: 6, flexShrink: 0 }}>⚠ Pending</span>}
+                  </div>
+                );
+              })}
             </div>
           )}
 

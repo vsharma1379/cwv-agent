@@ -15,7 +15,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PAGE_NAME_RE = /^[a-zA-Z0-9_\-.]+$/;
 
 router.post('/metabase-query', async (req, res) => {
-  const { clickLabel, entityIdFilter, pageName, fromDate, toDate, deviceTypes, loginStatuses } = req.body;
+  const { clickLabel, entityIdFilter, pageName, fromDate, toDate, deviceTypes, loginStatus } = req.body;
 
   if (!clickLabel || !fromDate || !toDate) {
     return res.status(400).json({ error: 'Missing required parameters: clickLabel, fromDate, toDate' });
@@ -32,21 +32,21 @@ router.post('/metabase-query', async (req, res) => {
   if (deviceTypes && (!Array.isArray(deviceTypes) || deviceTypes.some(d => !VALID_DEVICE_TYPES.includes(d)))) {
     return res.status(400).json({ error: `deviceTypes must be an array of: ${VALID_DEVICE_TYPES.join(', ')}` });
   }
-  if (loginStatuses && (!Array.isArray(loginStatuses) || loginStatuses.some(s => !VALID_LOGIN_STATUSES.includes(Number(s))))) {
-    return res.status(400).json({ error: 'loginStatuses must be an array of 0 and/or 1' });
+  if (loginStatus && !['any', '0', '1'].includes(String(loginStatus))) {
+    return res.status(400).json({ error: 'loginStatus must be any, 0, or 1' });
   }
 
   const entityClause =
-    entityIdFilter === 'not_null' ? 'AND entity IS NOT NULL ' :
-    entityIdFilter === 'null'     ? "AND (entity IS NULL OR entity = '') " :
+    entityIdFilter === 'not_null' ? "AND entity != 'BLANK' " :
+    entityIdFilter === 'null'     ? "AND entity = 'BLANK' " :
     '';  // 'any' — no entity filter
 
   const deviceClause = deviceTypes?.length
     ? `AND deviceType IN (${deviceTypes.map(d => `'${d}'`).join(', ')}) `
     : '';
 
-  const loginClause = loginStatuses?.length
-    ? `AND loginStatus IN (${loginStatuses.map(Number).join(', ')}) `
+  const loginClause = loginStatus && loginStatus !== 'any'
+    ? `AND loginStatus = ${Number(loginStatus)} `
     : '';
 
   const query =

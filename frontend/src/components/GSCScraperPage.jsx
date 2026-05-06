@@ -7,7 +7,7 @@ const API = '/api';
 
 export default function GSCScraperPage({ auth, onLogout }) {
   const [sites, setSites] = useState([]);
-  const [selectedSite, setSelectedSite] = useState('');
+  const [selectedSite, setSelectedSite] = useState('https://www.ambitionbox.com/');
   const [setupStatus, setSetupStatus] = useState(null);
   const [setupLoading, setSetupLoading] = useState(false);
   const [scraping, setScraping] = useState(false);
