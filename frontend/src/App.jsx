@@ -32,12 +32,13 @@ export default function App() {
             });
             const newAuth = { ...authRef.current, access_token: data.access_token };
             setAuth(newAuth);
-            sessionStorage.setItem('cwv_auth', JSON.stringify(newAuth));
+            localStorage.setItem('cwv_auth', JSON.stringify(newAuth));
             original.headers['x-access-token'] = data.access_token;
             return axios(original);
-          } catch {
-            sessionStorage.removeItem('cwv_auth');
+          } catch (refreshErr) {
+            localStorage.removeItem('cwv_auth');
             setAuth(null);
+            setError('Your session has expired. Please sign in again.');
           }
         }
         return Promise.reject(err);
@@ -67,13 +68,13 @@ export default function App() {
         picture: params.get('picture') || '',
       };
       setAuth(authData);
-      sessionStorage.setItem('cwv_auth', JSON.stringify(authData));
+      localStorage.setItem('cwv_auth', JSON.stringify(authData));
       window.history.replaceState({}, '', window.location.pathname);
       return;
     }
 
-    // Restore from session storage
-    const stored = sessionStorage.getItem('cwv_auth');
+    // Restore from local storage
+    const stored = localStorage.getItem('cwv_auth');
     if (stored) {
       try { setAuth(JSON.parse(stored)); } catch { sessionStorage.removeItem('cwv_auth'); }
     }
@@ -84,7 +85,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    sessionStorage.removeItem('cwv_auth');
+    localStorage.removeItem('cwv_auth');
     setAuth(null);
   };
 

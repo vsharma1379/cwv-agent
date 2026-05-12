@@ -1688,15 +1688,105 @@ function runClaudeCLI(prompt, timeoutMs = 120000) {
   });
 }
 
-// Streams SSE events: { type: 'status'|'token'|'done'|'error', text }
-// Analyses a single file from a commit — small focused prompt, fast response
-router.post("/commit-analysis/ai-analyze", async (req, res) => {
-  const { commitSha, filePath, metric } = req.body;
+// Parses an MR IID from a full GitLab MR URL or a plain number string.
+function parseMrIid(input) {
+  const trimmed = (input || '').trim();
+  const urlMatch = trimmed.match(/merge_requests\/(\d+)/);
+  if (urlMatch) return parseInt(urlMatch[1], 10);
+  const num = parseInt(trimmed, 10);
+  return !isNaN(num) && num > 0 ? num : null;
+}
 
-  if (!commitSha || !filePath) {
+// Fetches and analyses all frontend file diffs in an MR.
+// POST /api/commit-analysis/analyze-mr
+router.post('/commit-analysis/analyze-mr', async (req, res) => {
+  const { mrUrl, metric } = req.body;
+  if (!mrUrl) return res.status(400).json({ error: 'mrUrl is required' });
+  if (!metric || !['cls', 'inp', 'both'].includes(metric)) {
+    return res.status(400).json({ error: 'metric must be cls, inp, or both' });
+  }
+
+  const mrIid = parseMrIid(mrUrl);
+  if (!mrIid) return res.status(400).json({ error: 'Could not parse MR ID from the URL' });
+
+  let headers;
+  try { headers = getGitLabHeaders(); } catch (e) {
+    return res.status(503).json({ error: e.message });
+  }
+
+  try {
+    const { data: mr } = await axios.get(
+      `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}`,
+      { headers, timeout: 15000 },
+    );
+
+    const diffs = await fetchAllPages(
+      `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}/diffs`,
+      {}, headers, 20000,
+    );
+
+    const frontendDiffs = diffs.filter(d =>
+      /\.(jsx?|tsx?|vue|css|scss|less|html?|ejs)$/.test(d.new_path),
+    );
+
+    const fileResults = frontendDiffs
+      .map(d => ({ file: d.new_path, findings: analyzeDiff(d.diff || '', metric) }))
+      .filter(f => f.findings.length > 0);
+
+    const changedFiles = frontendDiffs.map(d => ({
+      file: d.new_path,
+      oldPath: d.old_path,
+      isNew: d.new_file,
+      isDeleted: d.deleted_file,
+      isRenamed: d.renamed_file,
+      addedLineCount: (d.diff || '').split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
+      removedLineCount: (d.diff || '').split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
+      rawDiff: d.diff || '',
+    }));
+
+    const allFindings = fileResults.flatMap(f => f.findings);
+    const score = riskScore(allFindings);
+
+    res.json({
+      mr: {
+        id: mr.iid,
+        title: mr.title,
+        description: (mr.description || '').slice(0, 600),
+        url: mr.web_url,
+        labels: mr.labels || [],
+        author: mr.author?.name || '',
+        state: mr.state,
+        sourceBranch: mr.source_branch,
+        targetBranch: mr.target_branch,
+        createdAt: mr.created_at,
+        headSha: mr.sha,
+      },
+      metric,
+      riskScore: score,
+      riskLevel: riskLevel(score),
+      fileResults,
+      changedFiles,
+      totalFiles: diffs.length,
+      frontendFiles: frontendDiffs.length,
+    });
+  } catch (e) {
+    const status = e.response?.status;
+    const msg = e.response?.data?.message || e.message;
+    if (status === 401 || status === 403) return res.status(403).json({ error: 'GitLab auth failed.' });
+    if (status === 404) return res.status(404).json({ error: `MR !${mrIid} not found.` });
+    res.status(500).json({ error: msg });
+  }
+});
+
+// Streams SSE events: { type: 'status'|'token'|'done'|'error', text }
+// Analyses a single file from a commit or MR — small focused prompt, fast response
+router.post("/commit-analysis/ai-analyze", async (req, res) => {
+  const { commitSha, mrIid, filePath, metric } = req.body;
+
+  if ((!commitSha && !mrIid) || !filePath) {
     return res
       .status(400)
-      .json({ error: "commitSha and filePath are required" });
+      .json({ error: "commitSha or mrIid, and filePath are required" });
   }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -1718,10 +1808,24 @@ router.post("/commit-analysis/ai-analyze", async (req, res) => {
   try {
     send({ type: "status", text: "Fetching diff..." });
 
-    const diffs = await fetchAllPages(
-      `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/commits/${commitSha}/diff`,
-      {}, gitHeaders, 20000,
-    );
+    let diffs, fileRef;
+    if (mrIid) {
+      const { data: mrData } = await axios.get(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}`,
+        { headers: gitHeaders, timeout: 15000 },
+      );
+      fileRef = mrData.sha;
+      diffs = await fetchAllPages(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}/diffs`,
+        {}, gitHeaders, 20000,
+      );
+    } else {
+      fileRef = commitSha;
+      diffs = await fetchAllPages(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/commits/${commitSha}/diff`,
+        {}, gitHeaders, 20000,
+      );
+    }
 
     const fileDiff = diffs.find(
       (d) => d.new_path === filePath || d.old_path === filePath,
@@ -1729,7 +1833,7 @@ router.post("/commit-analysis/ai-analyze", async (req, res) => {
     if (!fileDiff) {
       send({
         type: "error",
-        text: `${filePath} not found in this commit's diff.`,
+        text: `${filePath} not found in this ${mrIid ? 'MR' : 'commit'}'s diff.`,
       });
       return res.end();
     }
@@ -1744,7 +1848,7 @@ router.post("/commit-analysis/ai-analyze", async (req, res) => {
         `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/files/${encodeURIComponent(
           filePath,
         )}/raw`,
-        { params: { ref: commitSha }, headers: gitHeaders, timeout: 15000 },
+        { params: { ref: fileRef }, headers: gitHeaders, timeout: 15000 },
       );
       const rawText = typeof data === "string" ? data : "";
       fileContent = buildCodexFileContext(rawText, fileDiff.diff || "");
@@ -1759,10 +1863,12 @@ router.post("/commit-analysis/ai-analyze", async (req, res) => {
         ? "INP (Interaction to Next Paint)"
         : "INP and CLS";
 
+    const sourceLabel = mrIid ? `MR !${mrIid}` : commitSha;
+
     const prompt = `You are a Core Web Vitals expert reviewing a single file in AmbitionBox's production Next.js monorepo.
 
 FILE: ${filePath}
-COMMIT: ${commitSha}
+SOURCE: ${sourceLabel}
 INVESTIGATE: ${metricLabel}
 
 === DIFF (what changed) ===
@@ -1827,10 +1933,10 @@ Keep response under 400 words. Be specific, not generic.`;
 // ── Codex (OpenAI CLI) per-file analysis — mirrors claude --print approach ──
 // POST /api/commit-analysis/ai-analyze-codex
 router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
-  const { commitSha, filePath, metric } = req.body;
+  const { commitSha, mrIid, filePath, metric } = req.body;
 
-  if (!commitSha || !filePath) {
-    return res.status(400).json({ error: "commitSha and filePath are required" });
+  if ((!commitSha && !mrIid) || !filePath) {
+    return res.status(400).json({ error: "commitSha or mrIid, and filePath are required" });
   }
 
   res.setHeader("Content-Type", "text/event-stream");
@@ -1852,16 +1958,30 @@ router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
   try {
     send({ type: "status", text: "Fetching diff..." });
 
-    const diffs = await fetchAllPages(
-      `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/commits/${commitSha}/diff`,
-      {}, gitHeaders, 20000,
-    );
+    let diffs, fileRef;
+    if (mrIid) {
+      const { data: mrData } = await axios.get(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}`,
+        { headers: gitHeaders, timeout: 15000 },
+      );
+      fileRef = mrData.sha;
+      diffs = await fetchAllPages(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/merge_requests/${mrIid}/diffs`,
+        {}, gitHeaders, 20000,
+      );
+    } else {
+      fileRef = commitSha;
+      diffs = await fetchAllPages(
+        `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/commits/${commitSha}/diff`,
+        {}, gitHeaders, 20000,
+      );
+    }
 
     const fileDiff = diffs.find(
       (d) => d.new_path === filePath || d.old_path === filePath,
     );
     if (!fileDiff) {
-      send({ type: "error", text: `${filePath} not found in this commit's diff.` });
+      send({ type: "error", text: `${filePath} not found in this ${mrIid ? 'MR' : 'commit'}'s diff.` });
       return res.end();
     }
 
@@ -1871,7 +1991,7 @@ router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
     try {
       const { data } = await axios.get(
         `${GITLAB_BASE}/projects/${PROJECT_PATH}/repository/files/${encodeURIComponent(filePath)}/raw`,
-        { params: { ref: commitSha }, headers: gitHeaders, timeout: 15000 },
+        { params: { ref: fileRef }, headers: gitHeaders, timeout: 15000 },
       );
       fileContext = buildCodexFileContext(data, fileDiff.diff);
     } catch {
@@ -1883,10 +2003,12 @@ router.post("/commit-analysis/ai-analyze-codex", async (req, res) => {
       : metric === "inp" ? "INP (Interaction to Next Paint)"
       : "INP and CLS";
 
+    const sourceLabel = mrIid ? `MR !${mrIid}` : commitSha;
+
     const prompt = `You are a Core Web Vitals expert reviewing a single file in AmbitionBox's production Next.js monorepo.
 
 FILE: ${filePath}
-COMMIT: ${commitSha}
+SOURCE: ${sourceLabel}
 INVESTIGATE: ${metricLabel}
 
 === DIFF (what changed) ===

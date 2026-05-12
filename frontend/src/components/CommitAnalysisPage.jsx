@@ -263,7 +263,7 @@ const AI_PROVIDERS = {
 };
 
 // Single independent analysis panel for one provider
-function AIPanel({ providerKey, commitSha, filePath, metric }) {
+function AIPanel({ providerKey, commitSha, mrIid, filePath, metric }) {
   const [state, setState] = useState('idle'); // idle | streaming | done | error
   const [status, setStatus] = useState('');
   const [text, setText] = useState('');
@@ -276,7 +276,7 @@ function AIPanel({ providerKey, commitSha, filePath, metric }) {
       const res = await fetch(`${API}${cfg.endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ commitSha, filePath, metric }),
+        body: JSON.stringify({ commitSha, mrIid, filePath, metric }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -361,17 +361,17 @@ function AIPanel({ providerKey, commitSha, filePath, metric }) {
 }
 
 // Container: shows both provider buttons, expands panels independently so both can be compared
-function FileAIAnalysis({ commitSha, filePath, metric }) {
+function FileAIAnalysis({ commitSha, mrIid, filePath, metric }) {
   return (
     <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <AIPanel providerKey="claude" commitSha={commitSha} filePath={filePath} metric={metric} />
-      <AIPanel providerKey="codex"  commitSha={commitSha} filePath={filePath} metric={metric} />
+      <AIPanel providerKey="claude" commitSha={commitSha} mrIid={mrIid} filePath={filePath} metric={metric} />
+      <AIPanel providerKey="codex"  commitSha={commitSha} mrIid={mrIid} filePath={filePath} metric={metric} />
     </div>
   );
 }
 
-// ── File row inside a commit ─────────────────────────────────────────────────
-function FileRow({ cf, fr, commitId, metric }) {
+// ── File row inside a commit or MR ───────────────────────────────────────────
+function FileRow({ cf, fr, commitId, mrIid, metric }) {
   const [open, setOpen] = useState(false);
   const [masterState, setMasterState] = useState('idle'); // idle | loading | done | error
   const [masterResult, setMasterResult] = useState(null);
@@ -476,7 +476,7 @@ function FileRow({ cf, fr, commitId, metric }) {
             </div>
           )}
 
-          <FileAIAnalysis commitSha={commitId} filePath={cf.file} metric={metric} />
+          <FileAIAnalysis commitSha={commitId} mrIid={mrIid} filePath={cf.file} metric={metric} />
         </div>
       )}
     </div>
@@ -555,20 +555,70 @@ function CommitCard({ commit, metric }) {
   );
 }
 
+// ── MR Analysis result card ──────────────────────────────────────────────────
+function MRAnalysisResult({ data }) {
+  const r = RISK[data.riskLevel] || RISK.unknown;
+  const allFiles = data.changedFiles || [];
+  const findingsMap = Object.fromEntries((data.fileResults || []).map(fr => [fr.file, fr]));
+
+  return (
+    <div>
+      <MRStrip mr={data.mr} />
+
+      {/* Summary */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        {[
+          { label: 'Total files',    value: data.totalFiles,              c: '#5f6368' },
+          { label: 'Frontend files', value: data.frontendFiles,           c: '#5f6368' },
+          { label: 'Flagged files',  value: data.fileResults?.length ?? 0, c: '#c5221f' },
+        ].map((s, i) => (
+          <div key={i} style={{ background: '#fff', border: '1px solid #e0e0e0', borderRadius: 8, padding: '8px 16px', textAlign: 'center', minWidth: 80 }}>
+            <div style={{ fontSize: 20, fontWeight: 700, color: s.c }}>{s.value}</div>
+            <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 1 }}>{s.label}</div>
+          </div>
+        ))}
+        <div style={{ background: r.bg, border: `1px solid ${r.color}40`, borderRadius: 8, padding: '8px 16px', textAlign: 'center', minWidth: 80 }}>
+          <div style={{ fontSize: 20, fontWeight: 700, color: r.color }}>{r.label}</div>
+          <div style={{ fontSize: 11, color: '#9e9e9e', marginTop: 1 }}>Risk · {data.riskScore}pt</div>
+        </div>
+      </div>
+
+      {allFiles.length === 0
+        ? <div style={{ textAlign: 'center', padding: 60, color: '#9e9e9e', fontSize: 14 }}>No frontend files changed in this MR.</div>
+        : (
+          <div style={{ border: '1px solid #e0e0e0', borderRadius: 10, background: '#fff', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+            {allFiles.map((cf, i) => (
+              <FileRow key={i} cf={cf} fr={findingsMap[cf.file]} mrIid={data.mr.id} metric={data.metric} />
+            ))}
+          </div>
+        )
+      }
+    </div>
+  );
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function CommitAnalysisPage() {
-  const [form, setForm]     = useState({ date: todayStr(), metric: 'both' });
+  const [mode, setMode]     = useState('date'); // 'date' | 'mr'
+  const [form, setForm]     = useState({ date: todayStr(), mrUrl: '', metric: 'both' });
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState('');
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
+  const switchMode = (m) => { setMode(m); setResult(null); setError(''); };
+
   const handleAnalyze = async () => {
     setLoading(true); setError(''); setResult(null);
     try {
-      const { data } = await axios.post(`${API}/commit-analysis`, form);
-      setResult(data);
+      if (mode === 'date') {
+        const { data } = await axios.post(`${API}/commit-analysis`, { date: form.date, metric: form.metric });
+        setResult({ type: 'date', ...data });
+      } else {
+        const { data } = await axios.post(`${API}/commit-analysis/analyze-mr`, { mrUrl: form.mrUrl, metric: form.metric });
+        setResult({ type: 'mr', ...data });
+      }
     } catch (e) {
       setError(e.response?.data?.error || e.message);
     } finally {
@@ -576,7 +626,9 @@ export default function CommitAnalysisPage() {
     }
   };
 
-  const riskCounts = result
+  const canAnalyze = mode === 'date' ? !!form.date : !!form.mrUrl.trim();
+
+  const riskCounts = result?.type === 'date'
     ? result.commits.reduce((acc, c) => { acc[c.riskLevel] = (acc[c.riskLevel] || 0) + 1; return acc; }, {})
     : null;
 
@@ -587,48 +639,80 @@ export default function CommitAnalysisPage() {
       <div style={{ marginBottom: 20 }}>
         <h2 style={{ margin: '0 0 4px', fontSize: 18, fontWeight: 700, color: '#202124' }}>Commit Impact Analyser</h2>
         <p style={{ margin: 0, fontSize: 13, color: '#5f6368' }}>
-          Pick a spike date — scans commits on <strong>monorepo-web-native</strong>, shows every changed file with diff and AI analysis.
+          Analyse by date or paste an MR URL to inspect any merge request directly.
         </p>
       </div>
 
       {/* ── Controls ── */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap', marginBottom: 20, padding: '16px 20px', background: '#fff', borderRadius: 10, border: '1px solid #e0e0e0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <div>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#5f6368', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Date</label>
-          <input type="date" value={form.date} max={todayStr()}
-            onChange={e => set('date', e.target.value)}
-            style={{ fontSize: 13, padding: '7px 10px', border: '1px solid #dadce0', borderRadius: 7, color: '#202124', outline: 'none', background: '#fff' }} />
+      <div style={{ marginBottom: 20, padding: '16px 20px', background: '#fff', borderRadius: 10, border: '1px solid #e0e0e0', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+
+        {/* Mode toggle */}
+        <div style={{ display: 'flex', gap: 4, marginBottom: 16 }}>
+          {[{ v: 'date', l: 'By Date' }, { v: 'mr', l: 'By MR URL' }].map(o => (
+            <button key={o.v} onClick={() => switchMode(o.v)} style={{
+              padding: '6px 16px', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+              border: '1px solid',
+              borderColor: mode === o.v ? '#1a73e8' : '#dadce0',
+              background: mode === o.v ? '#e8f0fe' : '#fff',
+              color: mode === o.v ? '#1a73e8' : '#5f6368',
+              fontWeight: mode === o.v ? 700 : 400,
+            }}>{o.l}</button>
+          ))}
         </div>
 
-        <div>
-          <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#5f6368', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Metric</label>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[
-              { v: 'both', l: 'CLS + INP' },
-              { v: 'cls',  l: 'CLS' },
-              { v: 'inp',  l: 'INP' },
-            ].map(o => (
-              <button key={o.v} onClick={() => set('metric', o.v)} style={{
-                padding: '7px 14px', borderRadius: 7, fontSize: 12, cursor: 'pointer',
-                border: '1px solid',
-                borderColor: form.metric === o.v ? '#1a73e8' : '#dadce0',
-                background: form.metric === o.v ? '#1a73e8' : '#fff',
-                color: form.metric === o.v ? '#fff' : '#5f6368',
-                fontWeight: form.metric === o.v ? 700 : 400,
-              }}>{o.l}</button>
-            ))}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+
+          {mode === 'date' ? (
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#5f6368', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Date</label>
+              <input type="date" value={form.date} max={todayStr()}
+                onChange={e => set('date', e.target.value)}
+                style={{ fontSize: 13, padding: '7px 10px', border: '1px solid #dadce0', borderRadius: 7, color: '#202124', outline: 'none', background: '#fff' }} />
+            </div>
+          ) : (
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#5f6368', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>MR URL or ID</label>
+              <input
+                type="text"
+                value={form.mrUrl}
+                onChange={e => set('mrUrl', e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && canAnalyze && !loading && handleAnalyze()}
+                placeholder="https://gitlab.../merge_requests/1234  or just  1234"
+                style={{ width: '100%', fontSize: 13, padding: '7px 10px', border: '1px solid #dadce0', borderRadius: 7, color: '#202124', outline: 'none', background: '#fff', boxSizing: 'border-box' }}
+              />
+            </div>
+          )}
+
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#5f6368', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Metric</label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { v: 'both', l: 'CLS + INP' },
+                { v: 'cls',  l: 'CLS' },
+                { v: 'inp',  l: 'INP' },
+              ].map(o => (
+                <button key={o.v} onClick={() => set('metric', o.v)} style={{
+                  padding: '7px 14px', borderRadius: 7, fontSize: 12, cursor: 'pointer',
+                  border: '1px solid',
+                  borderColor: form.metric === o.v ? '#1a73e8' : '#dadce0',
+                  background: form.metric === o.v ? '#1a73e8' : '#fff',
+                  color: form.metric === o.v ? '#fff' : '#5f6368',
+                  fontWeight: form.metric === o.v ? 700 : 400,
+                }}>{o.l}</button>
+              ))}
+            </div>
           </div>
-        </div>
 
-        <button onClick={handleAnalyze} disabled={loading || !form.date} style={{
-          padding: '8px 22px', background: loading ? '#9e9e9e' : '#1a73e8', color: '#fff',
-          border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
-          cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-end',
-        }}>
-          {loading ? (
-            <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #fff4', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Analysing...</>
-          ) : 'Analyse'}
-        </button>
+          <button onClick={handleAnalyze} disabled={loading || !canAnalyze} style={{
+            padding: '8px 22px', background: loading || !canAnalyze ? '#9e9e9e' : '#1a73e8', color: '#fff',
+            border: 'none', borderRadius: 7, fontSize: 13, fontWeight: 700,
+            cursor: loading || !canAnalyze ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: 7, alignSelf: 'flex-end',
+          }}>
+            {loading ? (
+              <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid #fff4', borderTop: '2px solid #fff', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} /> Analysing...</>
+            ) : 'Analyse'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -637,9 +721,9 @@ export default function CommitAnalysisPage() {
         </div>
       )}
 
-      {result && (
+      {result?.type === 'date' && (
         <>
-          {/* ── Summary strip ── */}
+          {/* ── Date mode summary strip ── */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             {[
               { label: 'Commits',     value: result.totalCommits,    c: '#5f6368' },
@@ -661,6 +745,8 @@ export default function CommitAnalysisPage() {
           }
         </>
       )}
+
+      {result?.type === 'mr' && <MRAnalysisResult data={result} />}
 
       <style>{`
         @keyframes spin  { to { transform: rotate(360deg); } }
